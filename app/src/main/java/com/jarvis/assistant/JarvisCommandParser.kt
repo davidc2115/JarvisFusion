@@ -379,6 +379,12 @@ object JarvisCommandParser {
                 if (calendarRef == null) "❌ Précise quel calendrier synchroniser (nom, compte, ID — voir list_calendars)."
                 else CalendarController.syncCalendar(context, calendarRef, json.optBoolean("enable", true))
             }
+            "set_default_calendar" -> {
+                val calendarRef = cleanOptionalField(json.optString("calendar", ""))
+                if (calendarRef == null) "❌ Précise quel calendrier utiliser par défaut (nom, compte, surnom ou ID — voir list_calendars)."
+                else CalendarController.setDefaultCalendar(context, calendarRef)
+            }
+            "reset_default_calendar" -> CalendarController.resetDefaultCalendar(context)
 
             // Mail : IMAP/SMTP (mot de passe d'application) reste le chemin PAR DEFAUT ---
             // repli sur l'API Gmail OAuth (voir GmailApiController/GoogleAccountController)

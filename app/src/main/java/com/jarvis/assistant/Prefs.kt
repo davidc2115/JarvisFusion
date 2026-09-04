@@ -30,6 +30,7 @@ object Prefs {
     // pour l'ordre de la chaine AiEngineManager ("auto" = ordre par defaut
     // AICore -> modele GGUF selectionne -> SmolVLM2). Voir AiEngineManager.kt.
     private const val KEY_PREFERRED_ENGINE_ID = "preferred_local_engine_id"
+    private const val KEY_DEFAULT_CALENDAR_ID = "default_calendar_id"
     private const val KEY_ACCENT_COLOR      = "accent_color"
     private const val KEY_HF_TOKEN          = "hf_token"
     private const val KEY_ORB_STYLE         = "orb_style"
@@ -724,6 +725,27 @@ object Prefs {
         keysToRemove.forEach { editor.remove(it) }
         editor.apply()
         return keysToRemove.size
+    }
+
+    // ─── Calendrier par défaut ("mon planning") ─────────────────────────────────
+    // Demande utilisateur : "quand je lui demande mon planning il m'affiche un planning
+    // spécifique, comme un surnom" -- mémorise UN calendrier précis (par ID, résolu au
+    // moment de set_default_calendar depuis un nom/surnom/compte) à utiliser automatiquement
+    // pour today_events/upcoming_events/week_events/search_event quand aucun calendrier
+    // n'est explicitement précisé dans la demande, au lieu du repli générique "tous les
+    // calendriers Google" (voir CalendarController.getEventsTimeRange/searchEvents).
+    // Même mécanisme de stockage (SharedPreferences) que les surnoms de calendrier ci-dessus,
+    // pour cohérence -- pas dans le vault Obsidian.
+
+    fun getDefaultCalendarId(context: Context): Long? {
+        val v = prefs(context).getLong(KEY_DEFAULT_CALENDAR_ID, -1L)
+        return if (v == -1L) null else v
+    }
+
+    fun setDefaultCalendarId(context: Context, calendarId: Long?) {
+        val editor = prefs(context).edit()
+        if (calendarId == null) editor.remove(KEY_DEFAULT_CALENDAR_ID) else editor.putLong(KEY_DEFAULT_CALENDAR_ID, calendarId)
+        editor.apply()
     }
 
 

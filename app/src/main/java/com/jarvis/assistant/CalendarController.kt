@@ -199,8 +199,12 @@ object CalendarController {
     }
 
     private fun calendarLabelSuffix(context: Context, calendarRef: String?): String {
-        if (calendarRef.isNullOrBlank()) return ""
-        val id = findCalendarId(context, calendarRef) ?: return ""
+        // Reflete aussi le calendrier par defaut ("mon planning", voir setDefaultCalendar)
+        // quand aucun calendarRef explicite n'est fourni -- pour que l'utilisateur voie
+        // TOUJOURS clairement quel planning precis est affiche, meme quand ce choix vient
+        // d'une preference memorisee plutot que de sa demande du moment.
+        val id = if (!calendarRef.isNullOrBlank()) findCalendarId(context, calendarRef) else Prefs.getDefaultCalendarId(context)
+        if (id == null) return ""
         val name = buildCalendarNameMap(context)[id] ?: return ""
         return " — $name"
     }
@@ -257,6 +261,12 @@ object CalendarController {
             if (filterCalendarId == null) {
                 return "❌ Calendrier « $calendarRef » introuvable. Utilise list_calendars pour voir les calendriers disponibles, puis donne-lui un surnom avec name_calendar si besoin."
             }
+        } else {
+            // Calendrier par defaut memorise via set_default_calendar ("mon planning") --
+            // essaye AVANT le repli generique "tous les calendriers Google" juste en dessous,
+            // pour que "mon planning"/"aujourd'hui" sans autre precision affiche directement
+            // CE calendrier precis des qu'il a ete defini une fois.
+            filterCalendarId = Prefs.getDefaultCalendarId(context)
         }
 
         val projection = arrayOf(
@@ -311,6 +321,16 @@ object CalendarController {
                 // today_events/upcoming_events/search_event de INFORMATIONAL_ACTIONS
                 // (JarvisCommandParser) pour que ce texte ne soit plus jamais réécrit en
                 // réponse orale sans mise en forme.
+                //
+                // UNE LIGNE PAR ÉVÉNEMENT (demande utilisateur : "pour que l'affichage soit
+                // plus rapide à lire") -- avant ce format, chaque événement prenait jusqu'à 4
+                // lignes (heure+titre, calendrier, localisation, ligne vide), obligeant à
+                // scroller/scanner beaucoup pour un planning chargé. L'ID reste présent (le
+                // modèle en a besoin pour update_event/delete_event en suivi) mais poussé en
+                // fin de ligne sous une forme courte "#12345" plutôt que "(ID: 12345)", pour
+                // ne pas interrompre visuellement la lecture heure → titre → lieu. La ligne
+                // vide ne sépare plus que deux JOURS différents, jamais deux événements du
+                // même jour.
                 data class Row(val eventId: Long, val eventTitle: String, val dtStart: Long, val location: String, val calendarId: Long)
                 val rows = mutableListOf<Row>()
                 while (c.moveToNext()) {
@@ -325,20 +345,21 @@ object CalendarController {
                 rows.forEach { row ->
                     val day = dayFmt.format(Date(row.dtStart))
                     if (day != lastDay) {
+                        if (lastDay != null) sb.append("\n")
                         sb.append("🔹 $day\n")
                         lastDay = day
                     }
                     val timeStr = timeFmt.format(Date(row.dtStart))
-                    sb.append("🕐 $timeStr — ${row.eventTitle} (ID: ${row.eventId})\n")
-                    if (distinctCalendarCount > 1) {
-                        val calendarName = calendarNames[row.calendarId] ?: "Calendrier inconnu"
-                        sb.append("   🗓️ $calendarName\n")
-                    }
+                    sb.append("🕐 $timeStr — ${row.eventTitle}")
                     if (row.location.isNotBlank()) {
                         val locationPrefixed = if (row.location.trimStart().startsWith("🏠")) row.location else "🏠 ${row.location}"
-                        sb.append("📍 $locationPrefixed\n")
+                        sb.append(" 📍 $locationPrefixed")
                     }
-                    sb.append("\n")
+                    if (distinctCalendarCount > 1) {
+                        val calendarName = calendarNames[row.calendarId] ?: "Calendrier inconnu"
+                        sb.append(" · $calendarName")
+                    }
+                    sb.append(" (#${row.eventId})\n")
                 }
                 sb.toString().trimEnd()
             } ?: "❌ Échec de l'accès à l'agenda."
@@ -519,6 +540,9 @@ object CalendarController {
             if (filterCalendarId == null) {
                 return "❌ Calendrier « $calendarRef » introuvable. Utilise list_calendars pour voir les calendriers disponibles."
             }
+        } else {
+            // Meme repli que getEventsTimeRange : calendrier par defaut memorise si defini.
+            filterCalendarId = Prefs.getDefaultCalendarId(context)
         }
 
         val projection = arrayOf(
@@ -553,6 +577,8 @@ object CalendarController {
             cursor?.use { c ->
                 if (c.count == 0) return "🔍 Aucun événement trouvé pour « $query »."
 
+                // Une ligne par résultat (même raisonnement que getEventsTimeRange ci-dessus --
+                // demande utilisateur : affichage plus rapide à lire), ID compact en fin de ligne.
                 val sb = StringBuilder("🔍 **Résultats de recherche dans l'agenda pour « $query »** :\n\n")
                 val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.FRENCH)
                 var idx = 0
@@ -563,14 +589,14 @@ object CalendarController {
                     val date = c.getLong(2)
                     val location = c.getString(3) ?: ""
 
-                    sb.append("${idx + 1}. **$title** — ${sdf.format(Date(date))} (ID: $eventId)\n")
+                    sb.append("${idx + 1}. $title — ${sdf.format(Date(date))}")
                     if (location.isNotBlank()) {
                         // Même préfixe 🏠 que les fiches contact : rend l'adresse cliquable
                         // (voir la règle "adresses postales toujours cliquables" du prompt).
                         val locationPrefixed = if (location.trimStart().startsWith("🏠")) location else "🏠 $location"
-                        sb.append("   📍 $locationPrefixed\n")
+                        sb.append(" 📍 $locationPrefixed")
                     }
-                    sb.append("\n")
+                    sb.append(" (#$eventId)\n")
                     idx++
                 }
                 sb.toString().trimEnd()
@@ -796,6 +822,33 @@ object CalendarController {
         Prefs.saveCalendarNickname(context, id, nickname)
         val currentName = buildCalendarNameMap(context)[id] ?: calendarRef
         return "✅ Le calendrier « $currentName » s'appellera désormais « $nickname »."
+    }
+
+    /**
+     * Mémorise [calendarRef] (ID, surnom, nom affiché ou compte -- même résolution que
+     * name_calendar/sync_calendar) comme "MON planning" par défaut : today_events/
+     * upcoming_events/week_events/search_event l'utiliseront automatiquement dès que
+     * l'utilisateur ne précise aucun calendrier explicite dans sa demande (voir
+     * Prefs.getDefaultCalendarId, consommé dans getEventsTimeRange/searchEvents ci-dessus).
+     * Demande utilisateur : "quand je lui demande mon planning il m'affiche un planning
+     * spécifique, comme un surnom" -- persiste ce choix une bonne fois pour toutes, sans
+     * avoir à repréciser le calendrier à chaque demande.
+     */
+    fun setDefaultCalendar(context: Context, calendarRef: String): String {
+        val id = findCalendarId(context, calendarRef)
+            ?: return "❌ Calendrier « $calendarRef » introuvable. Utilise list_calendars pour voir les noms/comptes disponibles, puis donne-lui un surnom avec name_calendar si besoin."
+        Prefs.setDefaultCalendarId(context, id)
+        val name = buildCalendarNameMap(context)[id] ?: calendarRef
+        return "✅ « $name » est maintenant TON planning par défaut — dis simplement « mon planning » ou « aujourd'hui » et JARVIS l'utilisera automatiquement, sans avoir à le repréciser à chaque fois."
+    }
+
+    /** Retire le calendrier par défaut mémorisé (voir setDefaultCalendar) -- retombe alors
+     *  sur le repli habituel (tous les calendriers Google configurés). */
+    fun resetDefaultCalendar(context: Context): String {
+        val had = Prefs.getDefaultCalendarId(context) != null
+        Prefs.setDefaultCalendarId(context, null)
+        return if (had) "✅ Planning par défaut retiré — JARVIS reviendra à tous tes calendriers Google par défaut."
+        else "ℹ️ Aucun planning par défaut n'était défini."
     }
 
     /**
