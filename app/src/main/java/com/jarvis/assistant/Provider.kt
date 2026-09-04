@@ -108,20 +108,17 @@ enum class Provider(
         needsApiKey = false
     ),
 
-    // ── Modèles embarqués sur le téléphone (hors-ligne) ───────────────────────
-    // Remplace ON_DEVICE/LOCAL_GGUF/LOCAL_ONNX (moteurs natifs llama.cpp/MediaPipe/ONNX Runtime
-    // GenAI, retirés tâches #247/#248 -- demande explicite utilisateur de garder l'IA on-device
-    // ACTUELLE de l'appli réécrite plutôt que l'ancien système natif) par les deux backends
-    // actuels : GeminiNanoController (AICore) et LocalLlmController (LiteRT-LM, sans NDK).
-    GEMINI_NANO(
-        "Gemini Nano (Google AICore, sur l'appareil)",
-        "",
-        "",
-        isLocal = true,
-        needsApiKey = false
-    ),
-    LOCAL_LITERT(
-        "Modèle local Qwen (LiteRT-LM, sur l'appareil)",
+    // ── Modèle embarqué sur le téléphone (hors-ligne) ─────────────────────────
+    // Fusion Phase 4g ("RETIRE TOUT IA LOCAL DE NEWJARVIS, POUR GREFFER SIMPLEMENT CELLE DE
+    // JARVIS2") : remplace les deux anciens backends GeminiNanoController (AICore direct via
+    // ML Kit GenAI) et LocalLlmController (LiteRT-LM/Qwen uniquement, tâches #247/#248) par
+    // UN SEUL provider représentant toute la chaîne de secours AiEngineManager de Jarvis2
+    // (AICore -> modèle GGUF optionnel choisi par l'utilisateur -> SmolVLM2 garanti) --
+    // AiEngineManager choisit lui-même en interne le meilleur moteur réellement disponible,
+    // l'utilisateur n'a plus qu'un seul choix "IA locale" à faire ici, le détail (quel modèle
+    // GGUF, si AICore est dispo...) se règle dans l'onglet Local des Réglages.
+    LOCAL_JARVIS(
+        "IA locale (Gemini Nano / modèle embarqué)",
         "",
         "",
         isLocal = true,

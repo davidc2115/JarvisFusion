@@ -1,5 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      minSdk reste 26 pour toute l'app (fusion Phase 4g, "RETIRE TOUT IA LOCAL DE NEWJARVIS,
+      POUR GREFFER SIMPLEMENT CELLE DE JARVIS2") meme si la lib client AICore declare elle-meme
+      minSdk 31. AiCoreEngine ne tourne de toute facon que sur des appareils qui ont reellement
+      AICore (des appareils 31+ haut de gamme), et chaque appel est protege par try/catch via
+      AiCoreSessionFactory.tryCreate — sur un appareil plus ancien, cette construction echoue
+      simplement et AiEngineManager retombe sur le modele GGUF optionnel puis SmolVLM2, jamais
+      de crash. Voir AiCoreEngine.kt.
+    -->
+    <uses-sdk tools:overrideLibrary="com.google.ai.edge.aicore" />
 
     <!-- ── Réseau ────────────────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET" />

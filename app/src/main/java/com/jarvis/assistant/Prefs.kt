@@ -25,6 +25,11 @@ object Prefs {
     private const val KEY_LOCAL_MODEL_PATH  = "local_model_path"
     private const val KEY_LOCAL_MODEL_FORMAT= "local_model_format"
     private const val KEY_LOCAL_LLM_MODEL_ID = "local_llm_model_id"
+    // Fusion Phase 4g ("RETIRE TOUT IA LOCAL DE NEWJARVIS, POUR GREFFER
+    // SIMPLEMENT CELLE DE JARVIS2") : surcharge explicite de l'utilisateur
+    // pour l'ordre de la chaine AiEngineManager ("auto" = ordre par defaut
+    // AICore -> modele GGUF selectionne -> SmolVLM2). Voir AiEngineManager.kt.
+    private const val KEY_PREFERRED_ENGINE_ID = "preferred_local_engine_id"
     private const val KEY_ACCENT_COLOR      = "accent_color"
     private const val KEY_HF_TOKEN          = "hf_token"
     private const val KEY_ORB_STYLE         = "orb_style"
@@ -330,6 +335,15 @@ object Prefs {
 
     fun setLocalLlmModelId(context: Context, modelId: String) {
         prefs(context).edit().putString(KEY_LOCAL_LLM_MODEL_ID, modelId).apply()
+    }
+
+    // Fusion Phase 4g -- voir AiEngineManager.preferredFirstChain(). "auto"
+    // (valeur par defaut) signifie : pas de surcharge, ordre de chaine normal.
+    fun getPreferredEngineId(context: Context): String =
+        prefs(context).getString(KEY_PREFERRED_ENGINE_ID, "auto") ?: "auto"
+
+    fun setPreferredEngineId(context: Context, engineId: String) {
+        prefs(context).edit().putString(KEY_PREFERRED_ENGINE_ID, engineId).apply()
     }
 
     fun saveLocalModelPath(context: Context, path: String) {

@@ -5,7 +5,10 @@ plugins {
 
 android {
     namespace 'com.jarvis.assistant'
-    compileSdk 35
+    // 36 requis par com.google.ai.edge.aicore (fusion Phase 4g) -- minSdk/targetSdk restent
+    // inchanges, chaque appel AICore est protege par un try/catch avec repli propre
+    // (AiCoreSessionFactory.tryCreate), voir aussi le <uses-sdk overrideLibrary> du manifest.
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.jarvis.assistant"
@@ -59,6 +62,11 @@ configurations.all {
 }
 
 dependencies {
+    // Llamatik (wrapper Kotlin/AAR prebuilt autour de llama.cpp, fork "Bonsai" -- voir
+    // LocalModelCatalog.LocalGgufModel.BONSAI_27B) : pas publie sur un depot Maven, fourni
+    // directement comme fichier binaire dans app/libs/, resolu via fileTree ci-dessous.
+    implementation fileTree(dir: 'libs', include: ['*.aar'])
+
     // ── Core Android ──────────────────────────────────────────────────────────
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'
@@ -77,19 +85,16 @@ dependencies {
     // Bibliothèque Java pure, aucune dépendance native, aucune clé/API requise.
     implementation 'eu.agno3.jcifs:jcifs-ng:2.1.10'
 
-    // ── IA embarquée : Gemini Nano via AICore (ML Kit GenAI Prompt API) -- gratuit,
-    // sans clé, tourne 100% sur l'appareil une fois le modèle téléchargé (Pixel 8+/Galaxy
-    // S24 notamment). Remplace MediaPipe tasks-genai (API legacy, voir LocalLlmController
-    // ci-dessous pour son successeur activement maintenu) -- tâches #247/#248, demande
-    // explicite : garder l'IA on-device ACTUELLE de l'appli réécrite.
-    implementation 'com.google.mlkit:genai-prompt:1.0.0-beta2'
-
-    // ── IA embarquée : LiteRT-LM (voir LocalLlmController) -- modèles Qwen (Apache 2.0,
-    // dépôts publics litert-community, aucun compte/jeton requis), fonctionne sur N'IMPORTE
-    // QUEL appareil suffisamment puissant (dont Xiaomi/Redmi/Poco, sans AICore). Remplace
-    // le moteur natif llama.cpp (NDK/CMake, module cpp/ retiré) et onnxruntime-android côté
-    // génération de texte -- gardé ci-dessous uniquement pour le wake-word (openWakeWord).
-    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.16.1'
+    // ── IA embarquée -- fusion Phase 4g ("RETIRE TOUT IA LOCAL DE NEWJARVIS, POUR GREFFER
+    // SIMPLEMENT CELLE DE JARVIS2") : remplace l'ancien duo ML Kit GenAI Prompt API
+    // (GeminiNanoController) + LiteRT-LM (LocalLlmController) par la chaîne AiEngineManager
+    // de Jarvis2 :
+    //  - com.google.ai.edge.aicore (SDK expérimental officiel Google, distinct de ML Kit
+    //    GenAI ci-dessus) pour Gemini Nano/AICore natif — voir AiCoreEngine.
+    //  - Llamatik (AAR local ci-dessus, wrapper llama.cpp) pour le catalogue GGUF optionnel
+    //    (SelectableLlmEngine) et le modèle embarqué garanti SmolVLM2 (SmolVlmEngine).
+    // Aucun compte ni jeton requis pour aucun de ces trois moteurs.
+    implementation 'com.google.ai.edge.aicore:aicore:0.0.1-exp01'
 
     // ── ONNX Runtime : uniquement requis par la détection de mot-clé (openWakeWord,
     // voir WakeWordService) qui exécute ses propres petits modèles ONNX de classification

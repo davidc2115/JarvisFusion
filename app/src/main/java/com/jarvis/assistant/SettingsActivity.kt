@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.LinearSnapHelper
 import androidx.recyclerview.widget.RecyclerView
@@ -735,48 +736,73 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    /** Bascule l'IA on-device sur Gemini Nano (AICore) -- aucun telechargement de modele a
-     *  gerer ici, GeminiNanoController s'en charge (voir MainActivity pour le flux complet
-     *  disponible/telechargeable/en telechargement). */
-    private fun selectGeminiNano() {
-        selectedProvider = Provider.GEMINI_NANO
-        providerSpinner.setSelection(Provider.entries.indexOf(Provider.GEMINI_NANO))
-        Prefs.save(this, Provider.GEMINI_NANO, "", "", "")
-        updateLocalModelLabel()
-        Toast.makeText(this, "\u2705 Gemini Nano activ\u00e9.", Toast.LENGTH_SHORT).show()
-    }
-
-    /** Bascule l'IA on-device sur le modele Qwen local deja telecharge (voir buildLocalModelCard
-     *  pour le declenchement du telechargement s'il ne l'est pas encore). */
-    private fun selectLocalLitert(model: LocalLlmController.LocalModel) {
-        Prefs.setLocalLlmModelId(this, model.id)
-        selectedProvider = Provider.LOCAL_LITERT
-        providerSpinner.setSelection(Provider.entries.indexOf(Provider.LOCAL_LITERT))
-        Prefs.save(this, Provider.LOCAL_LITERT, "", "", "")
+    /**
+     * Fusion Phase 4g ("RETIRE TOUT IA LOCAL DE NEWJARVIS, POUR GREFFER SIMPLEMENT CELLE DE
+     * JARVIS2") : remplace les deux anciennes lignes fixes Gemini Nano/Qwen local par un onglet
+     * piloté par AiEngineManager -- trois moteurs "fixes" (Automatique / Gemini Nano AICore /
+     * SmolVLM2 garanti) plus le catalogue de modèles GGUF optionnels plus capables
+     * (LocalModelCatalog.LocalGgufModel, jusqu'à Bonsai 27B). Un seul provider (Provider.LOCAL_JARVIS)
+     * couvre tous ces choix ; c'est Prefs.getPreferredEngineId qui indique à AiEngineManager
+     * lequel essayer en premier (voir AiEngineManager.preferredFirstChain).
+     */
+    private fun selectPreferredEngine(engineId: String, label: String) {
+        Prefs.setPreferredEngineId(this, engineId)
+        selectedProvider = Provider.LOCAL_JARVIS
+        providerSpinner.setSelection(Provider.entries.indexOf(Provider.LOCAL_JARVIS))
+        Prefs.save(this, Provider.LOCAL_JARVIS, "", "", "")
         updateLocalModelLabel()
         rebuildModelCatalogUI()
-        Toast.makeText(this, "\u2705 Mod\u00e8le activ\u00e9 : ${model.displayName}", Toast.LENGTH_SHORT).show()
-    }
-
-    /** Cable les deux lignes fixes (Gemini Nano / Qwen local) + reconstruit les cartes de
-     *  telechargement des modeles Qwen disponibles. A l'inverse de l'ancien catalogue
-     *  multi-format, il n'y a plus qu'une seule famille de modele local (LiteRT-LM). */
-    private fun setupOnDeviceAiSection() {
-        findViewById<TextView>(R.id.geminiNanoRow).setOnClickListener { selectGeminiNano() }
-        findViewById<TextView>(R.id.localLitertRow).setOnClickListener {
-            val model = LocalLlmController.modelById(Prefs.getLocalLlmModelId(this))
-            if (LocalLlmController.isDownloaded(this, model)) {
-                selectLocalLitert(model)
-            } else {
-                Toast.makeText(this, "T\u00e9l\u00e9charge d'abord un mod\u00e8le Qwen ci-dessous.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "✅ $label sélectionné.", Toast.LENGTH_SHORT).show()
+        // refresh() relâche l'ancien moteur natif puis re-prépare la chaîne (voir doc de
+        // AiEngineManager.engineMutex : ne JAMAIS charger/décharger un modèle sans passer par
+        // ce verrou) -- la progression réelle (téléchargement/chargement) remonte automatiquement
+        // via activeEngineFlowCollector ci-dessous, pas besoin de la gérer ici.
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                AiEngineManager.getInstance(applicationContext).refresh()
+            } catch (_: Exception) {
+                // L'échec est déjà reflété dans activeEngine.notes, rien de plus à faire ici.
             }
         }
-        rebuildModelCatalogUI()
     }
 
-    /** Cree une carte visuelle pour un modele Qwen du registre LocalLlmController.AVAILABLE_MODELS
-     *  -- indique s'il est deja telecharge et propose de le telecharger/l'activer. */
-    private fun buildLocalModelCard(container: LinearLayout, model: LocalLlmController.LocalModel) {
+    /** Sélectionne (et télécharge si besoin) un modèle GGUF optionnel du catalogue. */
+    private fun selectGgufModel(model: LocalGgufModel) {
+        Prefs.setLocalLlmModelId(this, model.id)
+        selectPreferredEngine("selectable-gguf", model.displayName)
+    }
+
+    /**
+     * Câble les trois lignes fixes (Automatique / Gemini Nano / SmolVLM2) + reconstruit les
+     * cartes du catalogue de modèles GGUF optionnels, et s'abonne à AiEngineManager.activeEngine
+     * pour refléter en direct la progression réelle d'un téléchargement/chargement (au lieu
+     * d'un simple spinner sans texte).
+     */
+    private fun setupOnDeviceAiSection() {
+        findViewById<TextView>(R.id.autoEngineRow).setOnClickListener {
+            selectPreferredEngine("auto", "Automatique (meilleur moteur disponible)")
+        }
+        findViewById<TextView>(R.id.geminiNanoRow).setOnClickListener {
+            selectPreferredEngine("aicore-gemini-nano", "Gemini Nano (AICore)")
+        }
+        findViewById<TextView>(R.id.localLitertRow).setOnClickListener {
+            selectPreferredEngine("smolvlm2-llamacpp", "SmolVLM2 500M (embarqué, garanti)")
+        }
+        rebuildModelCatalogUI()
+
+        val engineManager = AiEngineManager.getInstance(applicationContext)
+        lifecycleScope.launch {
+            engineManager.activeEngine.collect { info ->
+                downloadProgressText.text = info?.notes.orEmpty()
+                updateLocalModelLabel()
+            }
+        }
+    }
+
+    /** Crée une carte visuelle pour un modèle GGUF optionnel du catalogue
+     *  (LocalModelCatalog.LocalGgufModel) -- indique s'il est déjà téléchargé et propose de le
+     *  télécharger/l'activer/le supprimer. */
+    private fun buildLocalModelCard(container: LinearLayout, model: LocalGgufModel) {
         val dp = resources.displayMetrics.density
 
         val card = LinearLayout(this).apply {
@@ -789,8 +815,9 @@ class SettingsActivity : AppCompatActivity() {
             ).also { it.bottomMargin = (12 * dp).toInt() }
         }
 
-        val isDownloaded = LocalLlmController.isDownloaded(this, model)
-        val isActive = isDownloaded && selectedProvider == Provider.LOCAL_LITERT &&
+        val isDownloaded = isGgufModelDownloaded(this, model)
+        val isActive = isDownloaded && selectedProvider == Provider.LOCAL_JARVIS &&
+            Prefs.getPreferredEngineId(this) == "selectable-gguf" &&
             Prefs.getLocalLlmModelId(this) == model.id
 
         val titleText = TextView(this).apply {
@@ -811,7 +838,7 @@ class SettingsActivity : AppCompatActivity() {
 
         if (isDownloaded) {
             val badge = TextView(this).apply {
-                text = if (isActive) "\u2705 T\u00e9l\u00e9charg\u00e9 \u2014 mod\u00e8le actif en ce moment" else "\u2705 T\u00e9l\u00e9charg\u00e9 (non actif)"
+                text = if (isActive) "✅ Téléchargé — modèle actif en ce moment" else "✅ Téléchargé (non actif)"
                 setTextColor(getColor(R.color.cyan_accent))
                 textSize = 11f
                 setTypeface(null, android.graphics.Typeface.BOLD)
@@ -824,7 +851,7 @@ class SettingsActivity : AppCompatActivity() {
 
         if (isDownloaded && !isActive) {
             val btnActivate = TextView(this).apply {
-                text = "\u2b50 UTILISER CE MOD\u00c8LE"
+                text = "⭐ UTILISER CE MODÈLE"
                 setTextColor(getColor(R.color.background_dark))
                 textSize = 12f
                 setTypeface(null, android.graphics.Typeface.BOLD)
@@ -832,12 +859,12 @@ class SettingsActivity : AppCompatActivity() {
                 background = getDrawable(R.drawable.bg_mic_button)
                 setPadding((12 * dp).toInt(), (10 * dp).toInt(), (12 * dp).toInt(), (10 * dp).toInt())
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                setOnClickListener { selectLocalLitert(model) }
+                setOnClickListener { selectGgufModel(model) }
             }
             buttonRow.addView(btnActivate)
         } else if (!isDownloaded) {
             val btnDownload = TextView(this).apply {
-                text = "\u2b07 T\u00c9L\u00c9CHARGER SUR LE T\u00c9L\u00c9PHONE"
+                text = "⬇ TÉLÉCHARGER SUR LE TÉLÉPHONE"
                 setTextColor(getColor(R.color.background_dark))
                 textSize = 12f
                 setTypeface(null, android.graphics.Typeface.BOLD)
@@ -851,7 +878,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         if (isDownloaded) {
             val btnDelete = TextView(this).apply {
-                text = "\ud83d\uddd1\ufe0f"
+                text = "🗑️"
                 setTextColor(getColor(R.color.text_secondary))
                 textSize = 16f
                 gravity = android.view.Gravity.CENTER
@@ -870,11 +897,11 @@ class SettingsActivity : AppCompatActivity() {
         container.addView(card)
     }
 
-    /** Reconstruit les cartes du catalogue Qwen -- necessaire apres un telechargement ou une
-     *  activation pour que la coche "telecharge/actif" se mette a jour immediatement. */
+    /** Reconstruit les cartes du catalogue GGUF -- nécessaire après un téléchargement ou une
+     *  activation pour que la coche "téléchargé/actif" se mette à jour immédiatement. */
     private fun rebuildModelCatalogUI() {
         modelCardsContainer.removeAllViews()
-        LocalLlmController.AVAILABLE_MODELS.forEach { model ->
+        LocalGgufModel.entries.forEach { model ->
             buildLocalModelCard(modelCardsContainer, model)
         }
     }
@@ -917,64 +944,73 @@ class SettingsActivity : AppCompatActivity() {
         LinearSnapHelper().attachToRecyclerView(orbStyleCarousel)
     }
 
-    /** Demarre le telechargement d'un modele Qwen (voir LocalLlmController.download) --
-     *  progression affichee dans downloadProgressText, active automatiquement le modele une
-     *  fois termine (comportement identique a l'ancien systeme). */
-    private fun startLocalModelDownload(model: LocalLlmController.LocalModel) {
+    /** Démarre le téléchargement d'un modèle GGUF optionnel (voir LocalModelCatalog.downloadGgufModel)
+     *  -- progression affichée dans downloadProgressText (et reprise en direct par le collecteur
+     *  de AiEngineManager.activeEngine une fois le chargement en mémoire commencé), active
+     *  automatiquement le modèle une fois terminé. */
+    private fun startLocalModelDownload(model: LocalGgufModel) {
         if (isDownloading) {
-            Toast.makeText(this, "Un t\u00e9l\u00e9chargement est d\u00e9j\u00e0 en cours\u2026", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Un téléchargement est déjà en cours…", Toast.LENGTH_SHORT).show()
             return
         }
         isDownloading = true
-        downloadProgressText.text = "\u2b07 D\u00e9marrage du t\u00e9l\u00e9chargement \u2014 ${model.displayName}\u2026"
+        downloadProgressText.text = "⬇ Démarrage du téléchargement — ${model.displayName}…"
 
         CoroutineScope(Dispatchers.Main).launch {
             try {
-                LocalLlmController.download(this@SettingsActivity, model) { downloaded, total ->
+                downloadGgufModel(this@SettingsActivity, model) { downloaded, total ->
                     runOnUiThread {
                         val pct = if (total > 0) (downloaded * 100 / total).toInt() else 0
-                        downloadProgressText.text = "\u2b07 T\u00e9l\u00e9chargement\u2026 $pct%"
+                        downloadProgressText.text = "⬇ Téléchargement… $pct%"
                     }
                 }
                 isDownloading = false
-                downloadProgressText.text = "\u2705 Mod\u00e8le t\u00e9l\u00e9charg\u00e9 et actif sur le t\u00e9l\u00e9phone !"
-                selectLocalLitert(model)
+                downloadProgressText.text = "✅ Modèle téléchargé et actif sur le téléphone !"
+                selectGgufModel(model)
             } catch (e: Exception) {
                 isDownloading = false
                 downloadProgressText.text = ""
-                Toast.makeText(this@SettingsActivity, "\u274c \u00c9chec : ${e.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@SettingsActivity, "❌ Échec : ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
 
     private fun updateLocalModelLabel() {
-        localModelPathText.text = when (selectedProvider) {
-            Provider.GEMINI_NANO -> "Mod\u00e8le actif : Gemini Nano (Google AICore)"
-            Provider.LOCAL_LITERT -> {
-                val model = LocalLlmController.modelById(Prefs.getLocalLlmModelId(this))
-                if (LocalLlmController.isDownloaded(this, model)) {
-                    "Mod\u00e8le actif sur l'appareil : ${model.displayName}"
-                } else {
-                    "Mod\u00e8le actif : Aucun (t\u00e9l\u00e9charge un mod\u00e8le Qwen ci-dessous)"
-                }
-            }
-            else -> "Mod\u00e8le actif : Aucun"
+        if (selectedProvider != Provider.LOCAL_JARVIS) {
+            localModelPathText.text = "Modèle actif : Aucun"
+            return
+        }
+        val activeInfo = AiEngineManager.getInstance(applicationContext).activeEngine.value
+        localModelPathText.text = if (activeInfo != null) {
+            val readyMark = if (activeInfo.isReady) "✅" else "⏳"
+            "$readyMark Modèle actif : ${activeInfo.displayName}"
+        } else {
+            "Modèle actif : IA locale (préparation en cours…)"
         }
     }
 
-    private fun deleteLocalTextModel(model: LocalLlmController.LocalModel) {
-        if (!LocalLlmController.isDownloaded(this, model)) {
-            Toast.makeText(this, "Aucun mod\u00e8le local \u00e0 supprimer.", Toast.LENGTH_SHORT).show()
+    private fun deleteLocalTextModel(model: LocalGgufModel) {
+        if (!isGgufModelDownloaded(this, model)) {
+            Toast.makeText(this, "Aucun modèle local à supprimer.", Toast.LENGTH_SHORT).show()
             return
         }
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Supprimer ce mod\u00e8le ?")
-            .setMessage("${model.displayName} sera effac\u00e9 du t\u00e9l\u00e9phone. Tu pourras le retélécharger plus tard si besoin.")
+            .setTitle("Supprimer ce modèle ?")
+            .setMessage("${model.displayName} sera effacé du téléphone. Tu pourras le retélécharger plus tard si besoin.")
             .setPositiveButton("Supprimer") { _, _ ->
-                LocalLlmController.deleteModel(this, model)
+                deleteGgufModel(this, model)
+                val wasActive = Prefs.getPreferredEngineId(this) == "selectable-gguf" && Prefs.getLocalLlmModelId(this) == model.id
+                if (wasActive) {
+                    // Le fichier natif chargé n'existe plus sur le disque -- force une
+                    // ré-initialisation propre de la chaîne au lieu de laisser AiEngineManager
+                    // croire que ce moteur est toujours prêt.
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        try { AiEngineManager.getInstance(applicationContext).refresh() } catch (_: Exception) {}
+                    }
+                }
                 updateLocalModelLabel()
                 rebuildModelCatalogUI()
-                Toast.makeText(this, "\ud83d\uddd1\ufe0f Mod\u00e8le supprim\u00e9.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "🗑️ Modèle supprimé.", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Annuler", null)
             .show()

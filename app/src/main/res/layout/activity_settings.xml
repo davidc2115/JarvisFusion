@@ -762,7 +762,7 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Mod\u00e8le IA embarqu\u00e9 sur le t\u00e9l\u00e9phone -- fonctionne enti\u00e8rement hors ligne, aucune donn\u00e9e envoy\u00e9e \u00e0 un serveur. Deux options selon ton appareil (voir GeminiNanoController/LocalLlmController) : Gemini Nano (Pixel 8+/Galaxy S24, via AICore, aucun t\u00e9l\u00e9chargement de mod\u00e8le \u00e0 g\u00e9rer) ou un mod\u00e8le Qwen local (n'importe quel appareil, t\u00e9l\u00e9chargement explicite requis)."
+                android:text="Mod\u00e8le IA embarqu\u00e9 sur le t\u00e9l\u00e9phone -- fonctionne enti\u00e8rement hors ligne, aucune donn\u00e9e envoy\u00e9e \u00e0 un serveur. AiEngineManager choisit automatiquement le meilleur moteur disponible (voir ci-dessous) : Gemini Nano (Pixel 8+/appareils compatibles AICore, aucun t\u00e9l\u00e9chargement \u00e0 g\u00e9rer), un mod\u00e8le du catalogue GGUF optionnel (Qwen/Phi/Dolphin/Bonsai/Gemma/LFM, t\u00e9l\u00e9chargement explicite requis), ou SmolVLM2 500M en dernier recours garanti (fonctionne sur tout t\u00e9l\u00e9phone, se t\u00e9l\u00e9charge tout seul)."
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp"
                 android:layout_marginBottom="12dp" />
@@ -779,6 +779,19 @@
                 android:textStyle="bold"
                 android:layout_marginBottom="16dp" />
 
+            <!-- Ligne Automatique (laisse AiEngineManager choisir) -->
+            <TextView
+                android:id="@+id/autoEngineRow"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:background="@drawable/bg_input"
+                android:padding="14dp"
+                android:text="\u2728 Automatique (meilleur moteur disponible)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="8dp" />
+
             <!-- Ligne Gemini Nano (AICore) -->
             <TextView
                 android:id="@+id/geminiNanoRow"
@@ -792,21 +805,21 @@
                 android:gravity="center_vertical"
                 android:layout_marginBottom="8dp" />
 
-            <!-- Ligne mod\u00e8le local Qwen (LiteRT-LM) -->
+            <!-- Ligne SmolVLM2 (d\u00e9faut garanti, llama.cpp) -->
             <TextView
                 android:id="@+id/localLitertRow"
                 android:layout_width="match_parent"
                 android:layout_height="56dp"
                 android:background="@drawable/bg_input"
                 android:padding="14dp"
-                android:text="\ud83d\udce6 Mod\u00e8le local Qwen (LiteRT-LM, tout appareil)"
+                android:text="\ud83d\udce6 SmolVLM2 500M (embarqu\u00e9, garanti, tout appareil)"
                 android:textColor="@color/text_primary"
                 android:textSize="13sp"
                 android:gravity="center_vertical"
                 android:layout_marginBottom="8dp" />
 
-            <!-- Cartes de t\u00e9l\u00e9chargement des mod\u00e8les Qwen disponibles (voir
-                 SettingsActivity.rebuildModelCatalogUI, LocalLlmController.AVAILABLE_MODELS) -->
+            <!-- Cartes de t\u00e9l\u00e9chargement des mod\u00e8les GGUF optionnels (voir
+                 SettingsActivity.rebuildModelCatalogUI, LocalModelCatalog.LocalGgufModel) -->
             <LinearLayout
                 android:id="@+id/modelCardsContainer"
                 android:layout_width="match_parent"

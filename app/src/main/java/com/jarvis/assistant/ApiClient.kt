@@ -3,7 +3,6 @@ package com.jarvis.assistant
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import com.google.mlkit.genai.common.FeatureStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -917,11 +916,14 @@ object ApiClient {
      *  téléchargés et enregistrés dans Prefs.getLocalModelsRegistry, dans l'ordre où ils ont été
      *  téléchargés, avant d'abandonner. */
     /**
-     * Backend IA on-device (voir GeminiNanoController/LocalLlmController -- tâches #247/#248,
-     * remplace l'ancien LocalLlmManager natif llama.cpp/ONNX GenAI/MediaPipe, retiré avec les
-     * modules NDK/CMake de l'appli). Prompt système court dédié (LOCAL_SYSTEM_PROMPT) +
-     * historique réduit à 3 tours -- même raisonnement que l'ancien code : le SYSTEM_PROMPT
-     * cloud complet dépasserait la fenêtre de contexte d'un petit modèle embarqué.
+     * Backend IA on-device -- fusion Phase 4g ("RETIRE TOUT IA LOCAL DE NEWJARVIS, POUR GREFFER
+     * SIMPLEMENT CELLE DE JARVIS2") : dispatché vers AiEngineManager (chaîne AICore -> modèle
+     * GGUF optionnel -> SmolVLM2 garanti), qui remplace entièrement les anciens
+     * GeminiNanoController/LocalLlmController (tâches #247/#248, eux-mêmes un remplacement d'un
+     * système natif llama.cpp/ONNX GenAI/MediaPipe encore plus ancien). Prompt système court
+     * dédié (LOCAL_SYSTEM_PROMPT) + historique réduit à 3 tours -- même raisonnement que
+     * l'ancien code : le SYSTEM_PROMPT cloud complet dépasserait la fenêtre de contexte d'un
+     * petit modèle embarqué.
      */
     private suspend fun sendLocal(
         context: Context,
@@ -930,24 +932,29 @@ object ApiClient {
         systemPrompt: String = SYSTEM_PROMPT,
         rawEscalateMarker: Boolean = false
     ): String {
-        val prompt = buildPromptFromHistory(history, withAssistantIdentity(context, LOCAL_SYSTEM_PROMPT), maxTurns = 3)
         DiagnosticsLog.log(context, "Local", "sendLocal: début (${provider.displayName})")
-        val result = when (provider) {
-            Provider.GEMINI_NANO -> when (GeminiNanoController.checkStatus()) {
-                FeatureStatus.AVAILABLE -> GeminiNanoController.generateReply(prompt)
-                FeatureStatus.DOWNLOADABLE, FeatureStatus.DOWNLOADING ->
-                    "❌ Gemini Nano n'est pas encore prêt sur cet appareil -- ouvre ⚙ Paramètres → Local pour le télécharger."
-                else -> "❌ Gemini Nano n'est pas disponible sur cet appareil (nécessite un Pixel 8+/Galaxy S24 compatible AICore)."
-            }
-            else -> {
-                val model = LocalLlmController.modelById(Prefs.getLocalLlmModelId(context))
-                if (!LocalLlmController.isDownloaded(context, model)) {
-                    "❌ Aucun modèle local téléchargé. Ouvre ⚙ Paramètres → onglet « Local » et télécharge un modèle."
-                } else {
-                    LocalLlmController.generateReply(context, model, prompt)
-                }
-            }
+        val turns = history.takeLast(3).map { entry ->
+            val hasImage = entry.imageBase64 != null || entry.attachments.any { it.imageBase64 != null }
+            val suffix = if (hasImage) " [photo jointe — non visible par ce modèle local, pas de vision]" else ""
+            Turn(
+                role = if (entry.role == "user") Turn.Role.USER else Turn.Role.ASSISTANT,
+                text = textWithAttachments(entry) + suffix,
+            )
         }
+        val localSystemPrompt = withAssistantIdentity(context, LOCAL_SYSTEM_PROMPT)
+        val lastUserTurn = turns.lastOrNull { it.role == Turn.Role.USER }
+        val promptText = lastUserTurn?.text ?: ""
+        val historyForEngine = turns.dropLastWhile { it !== lastUserTurn }.dropLast(1)
+
+        val engineResult = AiEngineManager.getInstance(context).generate(
+            prompt = promptText,
+            history = historyForEngine,
+            systemPrompt = localSystemPrompt,
+        )
+        val result = engineResult.fold(
+            onSuccess = { it },
+            onFailure = { "❌ ${it.message ?: "IA locale indisponible."}" },
+        )
         DiagnosticsLog.log(context, "Local", "sendLocal: retour : ${result.take(100)}")
         // rawEscalateMarker=true (voir readyLocalProviderForFirstTry) : appelant interne qui a
         // besoin de détecter <<ESCALATE_CLOUD>> lui-même pour basculer vers le cloud SANS jamais
@@ -969,27 +976,20 @@ object ApiClient {
      *  disponible sur l'appareil, ou un modèle Qwen/LiteRT déjà téléchargé. Renvoie le provider
      *  local à essayer, ou null si le mode est désactivé ou qu'aucun modèle n'est prêt (dans ce
      *  cas sendChat ne tente rien en local, comportement inchangé). */
-    private suspend fun readyLocalProviderForFirstTry(context: Context): Provider? {
+    private fun readyLocalProviderForFirstTry(context: Context): Provider? {
         if (!Prefs.isLocalFirstMode(context)) return null
-        if (GeminiNanoController.checkStatus() == FeatureStatus.AVAILABLE) return Provider.GEMINI_NANO
-        val model = LocalLlmController.modelById(Prefs.getLocalLlmModelId(context))
-        if (LocalLlmController.isDownloaded(context, model)) return Provider.LOCAL_LITERT
-        return null
-    }
-
-    private fun buildPromptFromHistory(history: List<HistoryEntry>, systemPrompt: String = SYSTEM_PROMPT, maxTurns: Int = 8): String {
-        val recent = history.takeLast(maxTurns)
-        val sb = StringBuilder(systemPrompt).append("\n\n")
-        for (entry in recent) {
-            val label = if (entry.role == "user") "Utilisateur" else "JARVIS"
-            // Le modèle local n'a pas de vision : une image jointe est juste signalée en texte,
-            // mais le texte extrait d'un document (DOCX/TXT/ZIP...) fonctionne, lui, sans vision.
-            val hasImage = entry.imageBase64 != null || entry.attachments.any { it.imageBase64 != null }
-            val suffix = if (hasImage) " [photo jointe — non visible par ce modèle local, pas de vision]" else ""
-            sb.append(label).append(": ").append(textWithAttachments(entry)).append(suffix).append("\n")
-        }
-        sb.append("JARVIS: ")
-        return sb.toString()
+        // Vérifications strictement locales (aucun réseau, aucune inférence déclenchée) : soit
+        // le modèle GGUF explicitement choisi par l'utilisateur est déjà téléchargé, soit
+        // SmolVLM2 (le défaut garanti) l'est déjà suite à un usage précédent. AICore n'a pas
+        // d'équivalent "vérification gratuite" (seul un vrai prepare()/generate() de test sait
+        // le confirmer, voir AiCoreEngine) : on ne le compte ici que si un cycle précédent
+        // (ex: l'écran Réglages → Local, qui appelle ensureReady au chargement) l'a déjà
+        // confirmé prêt -- jamais de sondage à chaud à chaque message.
+        val ggufModel = LocalGgufModel.byId(Prefs.getLocalLlmModelId(context))
+        val ggufReady = ggufModel != null && isGgufModelDownloaded(context, ggufModel)
+        val smolReady = isSmolVlmDownloaded(context)
+        val aiCoreReady = AiEngineManager.getInstance(context).activeEngine.value?.isReady == true
+        return Provider.LOCAL_JARVIS.takeIf { ggufReady || smolReady || aiCoreReady }
     }
 
     // ─── OpenAI-compatible avec rotation de clés ──────────────────────────────
