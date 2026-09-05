@@ -1119,6 +1119,10 @@ object ApiClient {
         for (attempt in 0 until maxAttempts) {
             val apiKey = if (keys.isNotEmpty()) Prefs.getNextApiKey(context, provider) else ""
 
+            // Filet de secours anonyme à débit très limité (Pollinations : 1 req/15s, voir
+            // Prefs.waitForProviderSlot) -- ne fait rien pour les autres fournisseurs.
+            Prefs.waitForProviderSlot(context, provider)
+
             if (apiKey.isNotBlank() && Prefs.wouldExceedTpmBudget(context, provider, apiKey, estimatedTokens)) {
                 lastErr = "Erreur API (429) : limite de débit ${provider.displayName} proche sur cette clé " +
                     "(protection proactive -- évite un vrai 429), clé suivante essayée automatiquement."

@@ -286,6 +286,44 @@ object Prefs {
         return tokensUsedLastMinute(context, provider, apiKey) + estimatedTokens > (limit * 0.9)
     }
 
+    // ─── Espacement minimal entre requêtes pour un fournisseur anonyme à débit très limité ────
+    // BUG RÉEL SUSPECTÉ (signalement utilisateur répété : "Toutes les IA configurées ont
+    // échoué" persiste même après les correctifs de blacklist/TPM Groq) : Pollinations (filet
+    // de secours GRATUIT et SANS CLÉ, censé "toujours répondre" en dernier recours dans
+    // AUTO_FALLBACK_ORDER) limite les requêtes ANONYMES à UNE seule toutes les 15 secondes
+    // (documentation officielle, github.com/pollinations/pollinations/APIDOCS.md, section
+    // "Access Tiers"). Or l'architecture actuelle fait DEUX appels par question informationnelle
+    // (réponse principale + reformulation naturelle, voir ApiClient.summarizeNaturally) : si
+    // Pollinations est atteint comme dernier recours, le DEUXIÈME appel arrive quasi
+    // instantanément après le premier et se fait quasi certainement rejeter (429) par ce même
+    // fournisseur -- le filet de secours "toujours disponible" ne l'est plus vraiment. Un vrai
+    // 429 réactif (blacklist) arrive trop tard ici : sans clé à faire tourner (needsApiKey=
+    // false), il n'y a qu'UN seul essai possible, donc UN seul 429 suffit à faire échouer TOUT
+    // le mode Automatique. Correctif : espacer PROACTIVEMENT les appels à ce type de
+    // fournisseur, quitte à attendre quelques secondes -- largement préférable à un échec
+    // garanti, puisque Pollinations est déjà le tout dernier recours (l'utilisateur attend déjà
+    // depuis un moment à ce stade de la cascade).
+    private val MIN_REQUEST_INTERVAL_MS: Map<Provider, Long> = mapOf(
+        Provider.POLLINATIONS to 15_500L, // 15s documentés + marge de sécurité
+    )
+
+    private fun lastCallKey(provider: Provider) = "last_call_${provider.name}"
+
+    /** Bloque le thread appelant (déjà sur un contexte d'IO, voir sendChat/Dispatchers.IO)
+     *  jusqu'à ce que l'intervalle minimal connu pour [provider] (voir MIN_REQUEST_INTERVAL_MS)
+     *  se soit écoulé depuis le dernier appel enregistré -- ne fait RIEN pour un fournisseur
+     *  absent de cette liste (comportement inchangé). */
+    fun waitForProviderSlot(context: Context, provider: Provider) {
+        val minIntervalMs = MIN_REQUEST_INTERVAL_MS[provider] ?: return
+        val key = lastCallKey(provider)
+        val last = prefs(context).getLong(key, 0L)
+        val elapsed = System.currentTimeMillis() - last
+        if (elapsed in 0 until minIntervalMs) {
+            try { Thread.sleep(minIntervalMs - elapsed) } catch (_: InterruptedException) { }
+        }
+        prefs(context).edit().putLong(key, System.currentTimeMillis()).apply()
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     // COMPTES EMAIL IMAP / SMTP
     // ═════════════════════════════════════════════════════════════════════════
