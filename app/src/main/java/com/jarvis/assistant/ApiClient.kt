@@ -1025,7 +1025,12 @@ object ApiClient {
                 return result
             }
 
-            if (apiKey.isNotBlank()) Prefs.markKeyFailed(context, provider, apiKey)
+            if (apiKey.isNotBlank()) {
+                // 429 = quota temporaire (voir Prefs.KEY_BLACKLIST_RATE_LIMIT_MS) -- surtout
+                // NE PAS traiter comme un 401 (clé vraiment invalide, blacklist longue).
+                val duration = if (result.startsWith("Erreur API (429)")) Prefs.KEY_BLACKLIST_RATE_LIMIT_MS else Prefs.KEY_BLACKLIST_DEFAULT_MS
+                Prefs.markKeyFailed(context, provider, apiKey, duration)
+            }
             lastErr = result
         }
 
@@ -1121,7 +1126,8 @@ object ApiClient {
         for (apiKey in keys) {
             val res = sendClaude(Provider.CLAUDE.defaultBaseUrl, Provider.CLAUDE.defaultModel, apiKey, history, systemPrompt)
             if (!res.startsWith("Erreur API Claude (429)") && !res.startsWith("Erreur API Claude (401)")) return res
-            Prefs.markKeyFailed(context, Provider.CLAUDE, apiKey)
+            val duration = if (res.startsWith("Erreur API Claude (429)")) Prefs.KEY_BLACKLIST_RATE_LIMIT_MS else Prefs.KEY_BLACKLIST_DEFAULT_MS
+            Prefs.markKeyFailed(context, Provider.CLAUDE, apiKey, duration)
         }
         return "Toutes les clés API Claude ont échoué."
     }
@@ -1200,7 +1206,8 @@ object ApiClient {
             val res = sendGemini(Provider.GEMINI.defaultBaseUrl, apiKey, history, systemPrompt)
             if (!res.startsWith("Erreur API Gemini (429)") && !res.startsWith("Erreur API Gemini (401)")) return res
             lastDetail = res
-            Prefs.markKeyFailed(context, Provider.GEMINI, apiKey)
+            val duration = if (res.startsWith("Erreur API Gemini (429)")) Prefs.KEY_BLACKLIST_RATE_LIMIT_MS else Prefs.KEY_BLACKLIST_DEFAULT_MS
+            Prefs.markKeyFailed(context, Provider.GEMINI, apiKey, duration)
         }
         return "Toutes les clés API Gemini ont échoué (${keys.size} clé(s) testée(s)) — dernière erreur : $lastDetail"
     }
@@ -1272,7 +1279,8 @@ object ApiClient {
                         return sb.toString().trimEnd()
                     }
                 } else if (response.code == 429 || response.code == 401) {
-                    Prefs.markKeyFailed(context, Provider.SERPAPI, apiKey)
+                    val duration = if (response.code == 429) Prefs.KEY_BLACKLIST_RATE_LIMIT_MS else Prefs.KEY_BLACKLIST_DEFAULT_MS
+                    Prefs.markKeyFailed(context, Provider.SERPAPI, apiKey, duration)
                 }
             }
         }

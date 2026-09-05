@@ -145,11 +145,29 @@ object Prefs {
         }
     }
 
-    /** Signale une clé comme défaillante (blacklist temporaire 1h). */
-    fun markKeyFailed(context: Context, provider: Provider, key: String) {
+    // Durée de blacklist par défaut pour un vrai échec (401 invalide, erreur inattendue) --
+    // inchangée par rapport au comportement historique (1h).
+    const val KEY_BLACKLIST_DEFAULT_MS = 60 * 60 * 1000L
+
+    // BUG RÉEL CORRIGÉ (signalement utilisateur : "j'ai 4 clés API Groq, et en seulement 2
+    // demandes le quota des 4 clés serait atteint" -- confirmé pré-existant avant la fusion
+    // JarvisFusion, pas une régression introduite ici) : un simple 429 (quota TEMPORAIRE,
+    // PAS une clé invalide/morte) blacklistait la clé pour 1h ENTIÈRE via markKeyFailed, avec
+    // la même durée qu'un vrai 401. Or UN SEUL tour de conversation peut déclencher plusieurs
+    // appels IA internes (réponse principale, rebond vault, reformulation de présentation...),
+    // et sendOpenAiWithRotation/sendClaudeWithRotation/sendGeminiWithRotation essaient TOUTES
+    // les clés configurées en rotation en cas d'échec -- si le quota Groq est partagé au niveau
+    // du COMPTE plutôt que par clé individuelle (plausible sur le tier gratuit), une seule
+    // rafale de 429 épuise les 4 clés d'un coup, qui restaient ensuite indisponibles pour le
+    // reste de l'heure même si le quota réel se libère bien plus vite (souvent en secondes).
+    const val KEY_BLACKLIST_RATE_LIMIT_MS = 30 * 1000L
+
+    /** Signale une clé comme défaillante -- [blacklistDurationMs] : voir KEY_BLACKLIST_RATE_LIMIT_MS
+     *  (429, quota temporaire) vs KEY_BLACKLIST_DEFAULT_MS (401/autre, échec réel) ci-dessus. */
+    fun markKeyFailed(context: Context, provider: Provider, key: String, blacklistDurationMs: Long = KEY_BLACKLIST_DEFAULT_MS) {
         val mapJson = prefs(context).getString("api_keys_failed_${provider.name}", "{}") ?: "{}"
         val map = try { JSONObject(mapJson) } catch (_: Exception) { JSONObject() }
-        map.put(key, System.currentTimeMillis())
+        map.put(key, System.currentTimeMillis() + blacklistDurationMs)
         prefs(context).edit().putString("api_keys_failed_${provider.name}", map.toString()).apply()
     }
 
@@ -158,8 +176,8 @@ object Prefs {
         return try {
             val map = JSONObject(mapJson)
             if (!map.has(key)) return false
-            val ts = map.getLong(key)
-            System.currentTimeMillis() - ts < 60 * 60 * 1000L // 1 heure
+            val expiry = map.getLong(key)
+            System.currentTimeMillis() < expiry
         } catch (_: Exception) { false }
     }
 
