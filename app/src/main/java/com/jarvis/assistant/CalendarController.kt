@@ -321,16 +321,6 @@ object CalendarController {
                 // today_events/upcoming_events/search_event de INFORMATIONAL_ACTIONS
                 // (JarvisCommandParser) pour que ce texte ne soit plus jamais réécrit en
                 // réponse orale sans mise en forme.
-                //
-                // UNE LIGNE PAR ÉVÉNEMENT (demande utilisateur : "pour que l'affichage soit
-                // plus rapide à lire") -- avant ce format, chaque événement prenait jusqu'à 4
-                // lignes (heure+titre, calendrier, localisation, ligne vide), obligeant à
-                // scroller/scanner beaucoup pour un planning chargé. L'ID reste présent (le
-                // modèle en a besoin pour update_event/delete_event en suivi) mais poussé en
-                // fin de ligne sous une forme courte "#12345" plutôt que "(ID: 12345)", pour
-                // ne pas interrompre visuellement la lecture heure → titre → lieu. La ligne
-                // vide ne sépare plus que deux JOURS différents, jamais deux événements du
-                // même jour.
                 data class Row(val eventId: Long, val eventTitle: String, val dtStart: Long, val location: String, val calendarId: Long)
                 val rows = mutableListOf<Row>()
                 while (c.moveToNext()) {
@@ -345,21 +335,20 @@ object CalendarController {
                 rows.forEach { row ->
                     val day = dayFmt.format(Date(row.dtStart))
                     if (day != lastDay) {
-                        if (lastDay != null) sb.append("\n")
                         sb.append("🔹 $day\n")
                         lastDay = day
                     }
                     val timeStr = timeFmt.format(Date(row.dtStart))
-                    sb.append("🕐 $timeStr — ${row.eventTitle}")
-                    if (row.location.isNotBlank()) {
-                        val locationPrefixed = if (row.location.trimStart().startsWith("🏠")) row.location else "🏠 ${row.location}"
-                        sb.append(" 📍 $locationPrefixed")
-                    }
+                    sb.append("🕐 $timeStr — ${row.eventTitle} (ID: ${row.eventId})\n")
                     if (distinctCalendarCount > 1) {
                         val calendarName = calendarNames[row.calendarId] ?: "Calendrier inconnu"
-                        sb.append(" · $calendarName")
+                        sb.append("   🗓️ $calendarName\n")
                     }
-                    sb.append(" (#${row.eventId})\n")
+                    if (row.location.isNotBlank()) {
+                        val locationPrefixed = if (row.location.trimStart().startsWith("🏠")) row.location else "🏠 ${row.location}"
+                        sb.append("📍 $locationPrefixed\n")
+                    }
+                    sb.append("\n")
                 }
                 sb.toString().trimEnd()
             } ?: "❌ Échec de l'accès à l'agenda."
@@ -577,8 +566,6 @@ object CalendarController {
             cursor?.use { c ->
                 if (c.count == 0) return "🔍 Aucun événement trouvé pour « $query »."
 
-                // Une ligne par résultat (même raisonnement que getEventsTimeRange ci-dessus --
-                // demande utilisateur : affichage plus rapide à lire), ID compact en fin de ligne.
                 val sb = StringBuilder("🔍 **Résultats de recherche dans l'agenda pour « $query »** :\n\n")
                 val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.FRENCH)
                 var idx = 0
@@ -589,14 +576,14 @@ object CalendarController {
                     val date = c.getLong(2)
                     val location = c.getString(3) ?: ""
 
-                    sb.append("${idx + 1}. $title — ${sdf.format(Date(date))}")
+                    sb.append("${idx + 1}. **$title** — ${sdf.format(Date(date))} (ID: $eventId)\n")
                     if (location.isNotBlank()) {
                         // Même préfixe 🏠 que les fiches contact : rend l'adresse cliquable
                         // (voir la règle "adresses postales toujours cliquables" du prompt).
                         val locationPrefixed = if (location.trimStart().startsWith("🏠")) location else "🏠 $location"
-                        sb.append(" 📍 $locationPrefixed")
+                        sb.append("   📍 $locationPrefixed\n")
                     }
-                    sb.append(" (#$eventId)\n")
+                    sb.append("\n")
                     idx++
                 }
                 sb.toString().trimEnd()
