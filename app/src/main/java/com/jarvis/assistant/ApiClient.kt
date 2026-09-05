@@ -933,6 +933,30 @@ object ApiClient {
         rawEscalateMarker: Boolean = false
     ): String {
         DiagnosticsLog.log(context, "Local", "sendLocal: début (${provider.displayName})")
+
+        // Chemin rapide (signalement utilisateur : "extrêmement long pour les commandes
+        // smartphone -- flash/réveil/minuteur -- alors qu'avant c'était instantané") : ces
+        // commandes sont déjà 100% déterministes (voir LocalCommandController, jusqu'ici
+        // réservé au dernier recours "cloud totalement injoignable") -- inutile de payer le
+        // coût, potentiellement plusieurs secondes sur un téléphone (rechargement d'un modèle
+        // GGUF de 400+ Mo en mémoire native si le process a été tué entre deux commandes, voir
+        // AiEngineManager), d'une inférence générative complète juste pour décider "l'utilisateur
+        // veut allumer sa lampe torche". Tenté EN PREMIER, avant tout appel à AiEngineManager ;
+        // prefix="" car l'IA locale n'a simplement pas été sollicitée ici, ce n'est pas un repli
+        // après échec. On ne retombe sur le modèle génératif que si rien ne correspond.
+        val lastUserEntry = history.lastOrNull { it.role == "user" }
+        if (lastUserEntry != null) {
+            val fastPathResult = try {
+                LocalCommandController.tryHandle(context, textWithAttachments(lastUserEntry), prefix = "")
+            } catch (_: Exception) {
+                null
+            }
+            if (fastPathResult != null) {
+                DiagnosticsLog.log(context, "Local", "sendLocal: commande rapide sans IA (${fastPathResult.take(60)})")
+                return fastPathResult
+            }
+        }
+
         val turns = history.takeLast(3).map { entry ->
             val hasImage = entry.imageBase64 != null || entry.attachments.any { it.imageBase64 != null }
             val suffix = if (hasImage) " [photo jointe — non visible par ce modèle local, pas de vision]" else ""
