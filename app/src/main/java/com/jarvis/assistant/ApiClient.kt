@@ -925,6 +925,50 @@ object ApiClient {
      * l'ancien code : le SYSTEM_PROMPT cloud complet dépasserait la fenêtre de contexte d'un
      * petit modèle embarqué.
      */
+    // Mots-clés couvrant TOUTES les catégories que LOCAL_SYSTEM_PROMPT (voir plus haut) exclut
+    // déjà explicitement de sa propre portée -- "contacts, agenda, fichiers, notes, email,
+    // réseau..." -- donc pour lesquelles l'issue d'un appel au modèle génératif embarqué est
+    // connue à 100% d'avance : soit <<ESCALATE_CLOUD>>, soit une hallucination (aucune de ces
+    // données n'est réellement accessible au modèle local, contrairement au cloud qui exécute
+    // les vraies actions JARVIS_CMD). Ne PAS y remettre lampe/réveil/minuteur : ces trois-là
+    // sont gérées par LocalCommandController (voir sendLocal) et doivent rester sur leur propre
+    // chemin rapide. Signalement utilisateur : "c'est la même chose avec agenda, contact, etc,
+    // toutes les commandes en lien avec le smartphone".
+    private val CLOUD_ONLY_PHONE_KEYWORDS = listOf(
+        // Agenda / calendrier
+        "planning", "calendrier", "agenda", "rendez-vous", "rendez vous", "rdv",
+        "réunion", "reunion", "évènement", "evenement", "évènements", "evenements",
+        // Contacts
+        "contact", "coordonnées", "coordonnees", "anniversaire",
+        // SMS / appels téléphoniques
+        "sms", "texto", "appel manqué", "appel manque", "mes appels", "derniers appels",
+        // Email
+        "email", "e-mail", "mail", "courriel", "boîte mail", "boite mail",
+        // Notifications
+        "notification", "notifications",
+        // WiFi / Bluetooth
+        "wifi", "wi-fi", "bluetooth",
+        // Fichiers
+        "fichier", "fichiers", "stockage", "storage",
+        // Notes / vault Obsidian (au-delà des quelques formulations déjà gérées par
+        // LocalCommandController.vaultSearchCommand)
+        "note", "notes", "obsidian", "vault", "journal",
+        // GPS / itinéraire (pas géré par LocalCommandController, contrairement à flash/réveil/minuteur)
+        "itinéraire", "itineraire", "gps", "où je suis", "ou je suis", "ma position",
+        // Domotique / Home Assistant
+        "domotique", "home assistant", "lumière", "lumieres", "volet", "thermostat",
+        "climatisation",
+        // GitHub
+        "github", "dépôt", "depot", "repo", "pull request",
+        // Réseau local / box internet
+        "réseau local", "reseau local", "freebox", "livebox", "sfr box", "bbox",
+    )
+
+    private fun mentionsCloudOnlyPhoneFeature(text: String): Boolean {
+        val lower = text.lowercase()
+        return CLOUD_ONLY_PHONE_KEYWORDS.any { lower.contains(it) }
+    }
+
     private suspend fun sendLocal(
         context: Context,
         provider: Provider,
@@ -934,7 +978,7 @@ object ApiClient {
     ): String {
         DiagnosticsLog.log(context, "Local", "sendLocal: début (${provider.displayName})")
 
-        // Chemin rapide (signalement utilisateur : "extrêmement long pour les commandes
+        // Chemin rapide n°1 (signalement utilisateur : "extrêmement long pour les commandes
         // smartphone -- flash/réveil/minuteur -- alors qu'avant c'était instantané") : ces
         // commandes sont déjà 100% déterministes (voir LocalCommandController, jusqu'ici
         // réservé au dernier recours "cloud totalement injoignable") -- inutile de payer le
@@ -943,11 +987,12 @@ object ApiClient {
         // AiEngineManager), d'une inférence générative complète juste pour décider "l'utilisateur
         // veut allumer sa lampe torche". Tenté EN PREMIER, avant tout appel à AiEngineManager ;
         // prefix="" car l'IA locale n'a simplement pas été sollicitée ici, ce n'est pas un repli
-        // après échec. On ne retombe sur le modèle génératif que si rien ne correspond.
+        // après échec.
         val lastUserEntry = history.lastOrNull { it.role == "user" }
+        val lastUserText = lastUserEntry?.let { textWithAttachments(it) } ?: ""
         if (lastUserEntry != null) {
             val fastPathResult = try {
-                LocalCommandController.tryHandle(context, textWithAttachments(lastUserEntry), prefix = "")
+                LocalCommandController.tryHandle(context, lastUserText, prefix = "")
             } catch (_: Exception) {
                 null
             }
@@ -957,28 +1002,44 @@ object ApiClient {
             }
         }
 
-        val turns = history.takeLast(3).map { entry ->
-            val hasImage = entry.imageBase64 != null || entry.attachments.any { it.imageBase64 != null }
-            val suffix = if (hasImage) " [photo jointe — non visible par ce modèle local, pas de vision]" else ""
-            Turn(
-                role = if (entry.role == "user") Turn.Role.USER else Turn.Role.ASSISTANT,
-                text = textWithAttachments(entry) + suffix,
+        // Chemin rapide n°2 (signalement utilisateur : "c'est la même chose avec agenda,
+        // contact, etc, toutes les commandes en lien avec le smartphone") : pour toutes les
+        // AUTRES catégories que LOCAL_SYSTEM_PROMPT exclut déjà lui-même explicitement de sa
+        // portée (voir CLOUD_ONLY_PHONE_KEYWORDS ci-dessus), le résultat d'un appel au modèle
+        // génératif est connu D'AVANCE -- <<ESCALATE_CLOUD>> à tous les coups, jamais une vraie
+        // réponse. Détecté ici pour éviter exactement le même coût (rechargement potentiel d'un
+        // modèle GGUF natif) que pour flash/réveil/minuteur ci-dessus, pour une issue déjà
+        // certaine. On simule directement le marqueur d'escalade, sans toucher AiEngineManager,
+        // puis on rejoint le traitement normal ci-dessous (conversion du marqueur en message
+        // clair si rawEscalateMarker=false, transmission telle quelle sinon).
+        val result: String
+        if (lastUserEntry != null && mentionsCloudOnlyPhoneFeature(lastUserText)) {
+            DiagnosticsLog.log(context, "Local", "sendLocal: bascule immédiate sans IA (catégorie cloud-only détectée)")
+            result = LOCAL_ESCALATE_MARKER
+        } else {
+            val turns = history.takeLast(3).map { entry ->
+                val hasImage = entry.imageBase64 != null || entry.attachments.any { it.imageBase64 != null }
+                val suffix = if (hasImage) " [photo jointe — non visible par ce modèle local, pas de vision]" else ""
+                Turn(
+                    role = if (entry.role == "user") Turn.Role.USER else Turn.Role.ASSISTANT,
+                    text = textWithAttachments(entry) + suffix,
+                )
+            }
+            val localSystemPrompt = withAssistantIdentity(context, LOCAL_SYSTEM_PROMPT)
+            val lastUserTurn = turns.lastOrNull { it.role == Turn.Role.USER }
+            val promptText = lastUserTurn?.text ?: ""
+            val historyForEngine = turns.dropLastWhile { it !== lastUserTurn }.dropLast(1)
+
+            val engineResult = AiEngineManager.getInstance(context).generate(
+                prompt = promptText,
+                history = historyForEngine,
+                systemPrompt = localSystemPrompt,
+            )
+            result = engineResult.fold(
+                onSuccess = { it },
+                onFailure = { "❌ ${it.message ?: "IA locale indisponible."}" },
             )
         }
-        val localSystemPrompt = withAssistantIdentity(context, LOCAL_SYSTEM_PROMPT)
-        val lastUserTurn = turns.lastOrNull { it.role == Turn.Role.USER }
-        val promptText = lastUserTurn?.text ?: ""
-        val historyForEngine = turns.dropLastWhile { it !== lastUserTurn }.dropLast(1)
-
-        val engineResult = AiEngineManager.getInstance(context).generate(
-            prompt = promptText,
-            history = historyForEngine,
-            systemPrompt = localSystemPrompt,
-        )
-        val result = engineResult.fold(
-            onSuccess = { it },
-            onFailure = { "❌ ${it.message ?: "IA locale indisponible."}" },
-        )
         DiagnosticsLog.log(context, "Local", "sendLocal: retour : ${result.take(100)}")
         // rawEscalateMarker=true (voir readyLocalProviderForFirstTry) : appelant interne qui a
         // besoin de détecter <<ESCALATE_CLOUD>> lui-même pour basculer vers le cloud SANS jamais
@@ -1038,13 +1099,35 @@ object ApiClient {
             return "Aucune clé API configurée pour ${provider.displayName}. Ajoute-en dans ⚙ Paramètres → Clés API."
         }
 
+        // Protection PROACTIVE contre le 429 (signalement utilisateur : "j'ai 4 clés API Groq,
+        // et en seulement 2 demandes le quota des 4 clés serait atteint") : sur les fournisseurs
+        // à plafond TPM connu et bas (Groq notamment -- voir Prefs.KNOWN_TPM_LIMITS), ce plafond
+        // s'applique au niveau du COMPTE, PAS par clé individuelle -- changer de clé une fois
+        // qu'on l'a dépassé ne sert donc à RIEN, les 4 clés partagent le même compteur réel.
+        // Estimation grossière (~4 caractères/jeton, suffisant pour une décision oui/non) du
+        // prompt système + historique sur le point d'être envoyé ; si ça dépasserait le budget
+        // encore disponible sur la minute glissante, on l'évite purement et simplement -- ni
+        // appel réseau voué à l'échec, ni clé blacklistée pour rien (elle n'a rien de cassé).
+        val estimatedTokens = estimateTokens(systemPrompt) + history.sumOf { estimateTokens(textWithAttachments(it)) }
+        if (Prefs.wouldExceedTpmBudget(context, provider, estimatedTokens)) {
+            return "Erreur API (429) : limite de débit ${provider.displayName} proche (protection proactive -- " +
+                "évite un vrai 429), nouvel essai dans un instant ou bascule automatique si le mode Automatique est actif."
+        }
+
         val maxAttempts = maxOf(1, keys.size)
         var lastErr = ""
 
         for (attempt in 0 until maxAttempts) {
             val apiKey = if (keys.isNotEmpty()) Prefs.getNextApiKey(context, provider) else ""
-            val result = sendOpenAiCompatible(baseUrl, model, apiKey, history, provider, systemPrompt)
+            val response = sendOpenAiCompatible(baseUrl, model, apiKey, history, provider, systemPrompt)
 
+            // Le budget TPM est par COMPTE (voir plus haut), donc enregistré qu'il y ait succès
+            // ou échec -- une requête envoyée consomme le quota même si la réponse échoue pour
+            // une autre raison que 429/401. Compte réel de la réponse quand connu (usage.total_
+            // tokens), sinon repli sur l'estimation calculée avant l'envoi.
+            Prefs.recordProviderTokens(context, provider, response.usageTokens ?: estimatedTokens)
+
+            val result = response.text
             if (!result.startsWith("Erreur API (429)") && !result.startsWith("Erreur API (401)")) {
                 return result
             }
@@ -1060,6 +1143,12 @@ object ApiClient {
 
         return lastErr
     }
+
+    /** Estimation grossière du nombre de jetons d'un texte (~4 caractères/jeton, moyenne
+     *  raisonnable pour du français/anglais mélangé) -- suffisante pour une décision de
+     *  protection proactive contre un dépassement de débit (voir Prefs.wouldExceedTpmBudget),
+     *  pas besoin d'un vrai tokenizer ici. */
+    private fun estimateTokens(text: String): Int = (text.length / 4).coerceAtLeast(1)
 
     // ─── Pièces jointes multiples : helpers partagés par tous les fournisseurs ─────────────
     // entry.attachments (voir Attachment.kt) est la source de vérité pour les messages RÉCENTS
@@ -1081,6 +1170,11 @@ object ApiClient {
         return entry.text + "\n\n" + texts.joinToString("\n\n") { "[Contenu d'un fichier joint]\n$it" }
     }
 
+    /** [usageTokens] = jetons réellement consommés d'après la réponse ("usage.total_tokens",
+     *  quand le fournisseur le renvoie), null si inconnu -- voir Prefs.recordProviderTokens,
+     *  qui retombe alors sur une estimation grossière côté appelant. */
+    private data class OpenAiCompatibleResult(val text: String, val usageTokens: Int?)
+
     private fun sendOpenAiCompatible(
         baseUrl: String,
         model: String,
@@ -1088,7 +1182,7 @@ object ApiClient {
         history: List<HistoryEntry>,
         provider: Provider,
         systemPrompt: String = SYSTEM_PROMPT
-    ): String {
+    ): OpenAiCompatibleResult {
         val messagesArray = JSONArray()
         messagesArray.put(JSONObject().put("role", "system").put("content", systemPrompt))
         for (entry in history) {
@@ -1130,14 +1224,16 @@ object ApiClient {
 
         client.newCall(requestBuilder.build()).execute().use { response ->
             val bodyStr = response.body?.string() ?: ""
-            if (!response.isSuccessful) return "Erreur API (${response.code}) : $bodyStr"
+            if (!response.isSuccessful) return OpenAiCompatibleResult("Erreur API (${response.code}) : $bodyStr", null)
             val json = JSONObject(bodyStr)
+            val usageTokens = json.optJSONObject("usage")?.optInt("total_tokens", -1)?.takeIf { it >= 0 }
             val choices = json.optJSONArray("choices")
             if (choices != null && choices.length() > 0) {
                 val message = choices.getJSONObject(0).optJSONObject("message")
-                return message?.optString("content") ?: "Réponse vide reçue du serveur."
+                val text = message?.optString("content") ?: "Réponse vide reçue du serveur."
+                return OpenAiCompatibleResult(text, usageTokens)
             }
-            return "Format de réponse inattendu : $bodyStr"
+            return OpenAiCompatibleResult("Format de réponse inattendu : $bodyStr", usageTokens)
         }
     }
 

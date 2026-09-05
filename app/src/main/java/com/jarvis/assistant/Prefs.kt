@@ -207,6 +207,73 @@ object Prefs {
         prefs(context).edit().putString(KEY_ROTATION_STRATEGY, strategy.name).apply()
     }
 
+    // ─── Suivi proactif des tokens/minute (évite le 429 AVANT qu'il arrive) ───────────────
+    // BUG RÉEL CONFIRMÉ (signalement utilisateur : "j'ai 4 clés API Groq, et en seulement 2
+    // demandes le quota des 4 clés serait atteint") : sur le tier gratuit Groq, la limite de
+    // débit (30 requêtes/min, 6000 tokens/min, tous modèles confondus) s'applique au niveau du
+    // COMPTE/ORGANISATION, PAS par clé individuelle -- avoir 4 clés du MÊME compte Groq ne
+    // multiplie donc PAS le quota réel, la rotation round-robin entre elles ne protège en rien
+    // contre un dépassement de TPM (seulement contre une clé individuellement révoquée/invalide).
+    // Or le prompt système complet (~2500 tokens) part potentiellement DEUX FOIS par question
+    // (réponse principale + reformulation naturelle, voir ApiClient.summarizeNaturally) : 6000
+    // TPM peut être épuisé en une à deux questions seulement, exactement le signalement reçu.
+    // Ce compteur glissant (fenêtre de 60s) permet de vérifier AVANT d'envoyer si la requête va
+    // probablement dépasser le budget connu du fournisseur, pour basculer tout de suite sur la
+    // clé/le fournisseur suivant SANS tenter un appel voué à l'échec -- plus rapide qu'attendre
+    // un vrai 429, et n'use pas la clé pour rien (elle n'a en réalité rien de cassé).
+    private const val TOKEN_WINDOW_MS = 60_000L
+
+    /** Plafond TPM (tokens/minute) connu et documenté pour les fournisseurs au tier gratuit
+     *  particulièrement restrictif (source : documentation officielle Groq, tier gratuit,
+     *  applicable à TOUS les modèles, au niveau du compte). Un fournisseur absent de cette
+     *  liste n'a AUCUNE vérification proactive -- comportement inchangé, uniquement la
+     *  détection réactive d'un vrai 429 (voir markKeyFailed/KEY_BLACKLIST_RATE_LIMIT_MS). */
+    private val KNOWN_TPM_LIMITS: Map<Provider, Int> = mapOf(
+        Provider.GROQ to 6000,
+    )
+
+    private fun tokenWindowKey(provider: Provider) = "token_window_${provider.name}"
+
+    /** Enregistre qu'une requête d'environ [tokens] jetons vient d'être envoyée à [provider]
+     *  (compte réel "usage.total_tokens" de la réponse si connu, sinon estimation) -- purge au
+     *  passage les entrées sorties de la fenêtre de 60s. */
+    fun recordProviderTokens(context: Context, provider: Provider, tokens: Int) {
+        if (tokens <= 0) return
+        val now = System.currentTimeMillis()
+        val existing = try {
+            JSONArray(prefs(context).getString(tokenWindowKey(provider), "[]") ?: "[]")
+        } catch (_: Exception) { JSONArray() }
+        val pruned = JSONArray()
+        for (i in 0 until existing.length()) {
+            val entry = existing.optJSONObject(i) ?: continue
+            if (now - entry.optLong("t") < TOKEN_WINDOW_MS) pruned.put(entry)
+        }
+        pruned.put(JSONObject().put("t", now).put("n", tokens))
+        prefs(context).edit().putString(tokenWindowKey(provider), pruned.toString()).apply()
+    }
+
+    /** Somme des tokens déjà envoyés à [provider] dans la dernière minute glissante. */
+    fun tokensUsedLastMinute(context: Context, provider: Provider): Int {
+        val now = System.currentTimeMillis()
+        val arr = try {
+            JSONArray(prefs(context).getString(tokenWindowKey(provider), "[]") ?: "[]")
+        } catch (_: Exception) { JSONArray() }
+        var total = 0
+        for (i in 0 until arr.length()) {
+            val entry = arr.optJSONObject(i) ?: continue
+            if (now - entry.optLong("t") < TOKEN_WINDOW_MS) total += entry.optInt("n")
+        }
+        return total
+    }
+
+    /** Vrai si envoyer environ [estimatedTokens] jetons à [provider] MAINTENANT risquerait de
+     *  dépasser son plafond TPM connu (marge de sécurité de 10%) -- toujours faux pour un
+     *  fournisseur sans plafond connu dans [KNOWN_TPM_LIMITS] (comportement inchangé). */
+    fun wouldExceedTpmBudget(context: Context, provider: Provider, estimatedTokens: Int): Boolean {
+        val limit = KNOWN_TPM_LIMITS[provider] ?: return false
+        return tokensUsedLastMinute(context, provider) + estimatedTokens > (limit * 0.9)
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     // COMPTES EMAIL IMAP / SMTP
     // ═════════════════════════════════════════════════════════════════════════
