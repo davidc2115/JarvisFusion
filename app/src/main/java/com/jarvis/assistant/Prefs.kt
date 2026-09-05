@@ -225,23 +225,31 @@ object Prefs {
 
     /** Plafond TPM (tokens/minute) connu et documenté pour les fournisseurs au tier gratuit
      *  particulièrement restrictif (source : documentation officielle Groq, tier gratuit,
-     *  applicable à TOUS les modèles, au niveau du compte). Un fournisseur absent de cette
-     *  liste n'a AUCUNE vérification proactive -- comportement inchangé, uniquement la
-     *  détection réactive d'un vrai 429 (voir markKeyFailed/KEY_BLACKLIST_RATE_LIMIT_MS). */
+     *  applicable à TOUS les modèles). Vérifié PAR CLÉ (voir wouldExceedTpmBudget) -- confirmé
+     *  par l'utilisateur que ses clés Groq viennent de comptes DIFFÉRENTS, donc chacune a son
+     *  propre plafond indépendant (contrairement à plusieurs clés d'un même compte, qui
+     *  partageraient un seul plafond global -- voir l'ancienne version de ce commentaire dans
+     *  l'historique git si ce cas se représente). Un fournisseur absent de cette liste n'a
+     *  AUCUNE vérification proactive -- comportement inchangé, uniquement la détection réactive
+     *  d'un vrai 429 (voir markKeyFailed/KEY_BLACKLIST_RATE_LIMIT_MS). */
     private val KNOWN_TPM_LIMITS: Map<Provider, Int> = mapOf(
         Provider.GROQ to 6000,
     )
 
-    private fun tokenWindowKey(provider: Provider) = "token_window_${provider.name}"
+    // Clé de fenêtre PAR CLÉ API (pas seulement par provider) : hashCode() suffit ici (simple
+    // regroupement interne, jamais affiché ni utilisé pour une quelconque sécurité) et évite de
+    // stocker la clé API en clair dans le nom de la préférence.
+    private fun tokenWindowKey(provider: Provider, apiKey: String) = "token_window_${provider.name}_${apiKey.hashCode()}"
 
     /** Enregistre qu'une requête d'environ [tokens] jetons vient d'être envoyée à [provider]
-     *  (compte réel "usage.total_tokens" de la réponse si connu, sinon estimation) -- purge au
-     *  passage les entrées sorties de la fenêtre de 60s. */
-    fun recordProviderTokens(context: Context, provider: Provider, tokens: Int) {
+     *  avec [apiKey] (compte réel "usage.total_tokens" de la réponse si connu, sinon
+     *  estimation) -- purge au passage les entrées sorties de la fenêtre de 60s. */
+    fun recordProviderTokens(context: Context, provider: Provider, apiKey: String, tokens: Int) {
         if (tokens <= 0) return
         val now = System.currentTimeMillis()
+        val key = tokenWindowKey(provider, apiKey)
         val existing = try {
-            JSONArray(prefs(context).getString(tokenWindowKey(provider), "[]") ?: "[]")
+            JSONArray(prefs(context).getString(key, "[]") ?: "[]")
         } catch (_: Exception) { JSONArray() }
         val pruned = JSONArray()
         for (i in 0 until existing.length()) {
@@ -249,14 +257,14 @@ object Prefs {
             if (now - entry.optLong("t") < TOKEN_WINDOW_MS) pruned.put(entry)
         }
         pruned.put(JSONObject().put("t", now).put("n", tokens))
-        prefs(context).edit().putString(tokenWindowKey(provider), pruned.toString()).apply()
+        prefs(context).edit().putString(key, pruned.toString()).apply()
     }
 
-    /** Somme des tokens déjà envoyés à [provider] dans la dernière minute glissante. */
-    fun tokensUsedLastMinute(context: Context, provider: Provider): Int {
+    /** Somme des tokens déjà envoyés à [provider] avec [apiKey] dans la dernière minute glissante. */
+    fun tokensUsedLastMinute(context: Context, provider: Provider, apiKey: String): Int {
         val now = System.currentTimeMillis()
         val arr = try {
-            JSONArray(prefs(context).getString(tokenWindowKey(provider), "[]") ?: "[]")
+            JSONArray(prefs(context).getString(tokenWindowKey(provider, apiKey), "[]") ?: "[]")
         } catch (_: Exception) { JSONArray() }
         var total = 0
         for (i in 0 until arr.length()) {
@@ -266,12 +274,16 @@ object Prefs {
         return total
     }
 
-    /** Vrai si envoyer environ [estimatedTokens] jetons à [provider] MAINTENANT risquerait de
-     *  dépasser son plafond TPM connu (marge de sécurité de 10%) -- toujours faux pour un
-     *  fournisseur sans plafond connu dans [KNOWN_TPM_LIMITS] (comportement inchangé). */
-    fun wouldExceedTpmBudget(context: Context, provider: Provider, estimatedTokens: Int): Boolean {
+    /** Vrai si envoyer environ [estimatedTokens] jetons à [provider] avec [apiKey] MAINTENANT
+     *  risquerait de dépasser le plafond TPM connu DE CETTE CLÉ (marge de sécurité de 10%) --
+     *  toujours faux pour un fournisseur sans plafond connu dans [KNOWN_TPM_LIMITS]
+     *  (comportement inchangé). Par clé et non par provider : chaque clé Groq de l'utilisateur
+     *  vient d'un compte distinct, donc d'un budget TPM indépendant -- si une clé approche son
+     *  plafond, les AUTRES clés restent parfaitement valides, inutile de les pénaliser aussi. */
+    fun wouldExceedTpmBudget(context: Context, provider: Provider, apiKey: String, estimatedTokens: Int): Boolean {
         val limit = KNOWN_TPM_LIMITS[provider] ?: return false
-        return tokensUsedLastMinute(context, provider) + estimatedTokens > (limit * 0.9)
+        if (apiKey.isBlank()) return false
+        return tokensUsedLastMinute(context, provider, apiKey) + estimatedTokens > (limit * 0.9)
     }
 
     // ═════════════════════════════════════════════════════════════════════════

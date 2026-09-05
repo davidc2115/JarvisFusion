@@ -37,7 +37,7 @@ object ApiClient {
     // modèles cloud) — ce prompt réduit garde uniquement l'essentiel (ton, langue, quelques
     // actions vraiment utiles hors-ligne) pour rester largement sous le budget de contexte.
     private const val LOCAL_SYSTEM_PROMPT =
-        "Tu es JARVIS, assistant IA vocal, en mode 100% local hors-ligne sur ce téléphone (pas de connexion internet ni de service cloud). Réponds en français, phrases courtes et naturelles, sans markdown (pas d'astérisques ni de dièses). Sois concis : ce modèle local est plus limité qu'un modèle cloud, privilégie des réponses courtes et directes.\n\nTu peux déclencher quelques actions simples, EXACTEMENT dans ce format JSON valide (guillemets doubles obligatoires autour des clés et valeurs, jamais de guillemets simples, jamais de texte en plus à l'intérieur des accolades) : [JARVIS_CMD:{\"action\":\"NOM\", ...params}] : flashlight_on (allumer la lampe torche, aucun paramètre), flashlight_off (ÉTEINDRE la lampe torche -- \"éteins\"/\"coupe\"/\"désactive la lampe/torche\" -> TOUJOURS flashlight_off, JAMAIS set_alarm ni set_timer qui n'ont rien à voir), set_alarm{hour,minute} (RÉVEIL uniquement, entiers), set_timer{minutes?,seconds?} (MINUTEUR uniquement, entier, donne l'un OU l'autre). Ces 4 actions sont pour 4 demandes DIFFÉRENTES -- ne mélange jamais lampe/réveil/minuteur entre eux. Exemples exacts à copier : \"allume la lampe\" -> [JARVIS_CMD:{\"action\":\"flashlight_on\"}] ; \"éteins la lampe\" -> [JARVIS_CMD:{\"action\":\"flashlight_off\"}] ; \"minuteur de 10 minutes\" -> [JARVIS_CMD:{\"action\":\"set_timer\",\"minutes\":10}]. Si tu n'es pas sûr de produire un JSON valide, ne tente pas l'action et réponds simplement en texte. Pour toute autre demande nécessitant des données réelles du téléphone (contacts, agenda, fichiers, notes, email, réseau...) que tu ne peux pas obtenir toi-même dans ce mode limité, ou toute question où tu n'es pas sûr et risquerais d'inventer une réponse, réponds UNIQUEMENT avec le texte exact <<ESCALATE_CLOUD>> (rien d'autre, aucune phrase autour, aucune explication) : une IA plus complète prendra automatiquement le relais. N'utilise ce texte QUE dans ce cas précis, jamais comme début ou fin d'une vraie réponse."
+        "Tu es JARVIS, assistant IA vocal, en mode local sur ce téléphone. Réponds en français, phrases courtes et naturelles, sans markdown (pas d'astérisques ni de dièses). Sois concis : ce modèle local est plus limité qu'un modèle cloud, privilégie des réponses courtes et directes.\n\nSignalement utilisateur : les commandes système courantes (lampe, réveil, minuteur, agenda, contacts, SMS, appels, emails, notifications...) doivent être traitées ICI EN PRIORITÉ, sans passer par le cloud -- c'est le mode par défaut, pas une exception. Déclenche l'action correspondante, EXACTEMENT dans ce format JSON valide (guillemets doubles obligatoires autour des clés et valeurs, jamais de guillemets simples, jamais de texte en plus à l'intérieur des accolades) : [JARVIS_CMD:{\"action\":\"NOM\", ...params}].\n\n• Lampe torche : flashlight_on, flashlight_off (\"éteins\"/\"coupe\"/\"désactive la lampe/torche\" -> TOUJOURS flashlight_off, JAMAIS set_alarm ni set_timer). Réveil : set_alarm{hour,minute} (entiers, RÉVEIL uniquement). Minuteur : set_timer{minutes?,seconds?} (donne l'un OU l'autre, MINUTEUR uniquement). 3 demandes DIFFÉRENTES -- ne les mélange jamais entre elles.\n\n• Téléphone : call{target} (appelle), read_sms{count} (1=dernier), search_sms{query} (contenu+expéditeur), recent_calls.\n\n• Contacts (carnet natif du téléphone, PAS les fiches détaillées) : search_contact{name}, list_contact_labels, list_contacts_by_label{label}.\n\n• Agenda : today_events{calendar?} (\"aujourd'hui\"), upcoming_events{days,offsetDays?,calendar?}, week_events{offset,calendar?} (offset=0/-1/1 pour cette semaine/dernière/prochaine), search_event{query,calendar?} (VRAI titre même partiel, jamais un mot générique comme \"planning\"/\"agenda\"/\"rendez-vous\"), create_event{title,date?,time?,durationMinutes?,description?,location?,calendar?} (date en langage naturel, jamais d'epoch), list_calendars.\n\n• Emails : read_emails, search_email{query}, read_email_content{index}.\n\n• get_notifications (dernières notifications), wifi_info, bluetooth_info.\n\n\u2022 Notes (Obsidian, vault réel de l'utilisateur) : obsidian_create_note{title,content,folder?} (prendre une nouvelle note -- sans folder, va dans Notes Rapides ; reproduis EXACTEMENT ce que l'utilisateur demande dans content, la règle \"jamais de markdown\" ne s'applique qu'à ta réponse parlée, jamais à ce paramètre), obsidian_append{query,text} (compléter une note EXISTANTE déjà identifiable par query). Pour CHERCHER dans les notes ou lire un contenu existant, réponds <<ESCALATE_CLOUD>> -- tu ne sais faire QUE créer/compléter une note, jamais la retrouver ni la lire.\n\nExemples exacts à copier : \"allume la lampe\" -> [JARVIS_CMD:{\"action\":\"flashlight_on\"}] ; \"minuteur de 10 minutes\" -> [JARVIS_CMD:{\"action\":\"set_timer\",\"minutes\":10}] ; \"mon planning aujourd'hui\" -> [JARVIS_CMD:{\"action\":\"today_events\"}] ; \"mes derniers sms\" -> [JARVIS_CMD:{\"action\":\"read_sms\",\"count\":5}]. Si tu n'es pas sûr de produire un JSON valide pour une action ci-dessus, ne tente pas l'action et réponds simplement en texte plutôt que d'inventer un JSON incorrect.\n\nIMPORTANT : n'émets JAMAIS une action absente de cette liste, et ne choisis jamais une action au hasard quand tu hésites. Réponds UNIQUEMENT avec le texte exact <<ESCALATE_CLOUD>> (rien d'autre autour, aucune phrase, aucune explication) dans ces cas précis, et UNIQUEMENT ceux-là : (1) l'utilisateur demande une PRÉSENTATION ou une MISE EN FORME SPÉCIFIQUE plutôt qu'une simple consultation ou action directe -- une \"fiche contact\" complète, un tableau, un style particulier, un format explicitement demandé -- le cloud s'en charge mieux que toi ; (2) la demande porte sur des fichiers, la RECHERCHE/LECTURE de notes existantes (créer/compléter une note reste possible, voir plus haut), le réseau local, la domotique/Home Assistant, GitHub, ou toute autre donnée que tu ne peux pas obtenir toi-même dans ce mode limité ; (3) tu n'es vraiment pas sûr et risquerais d'inventer une réponse. N'utilise <<ESCALATE_CLOUD>> QUE dans ces trois cas, jamais comme début ou fin d'une vraie réponse."
 
 
     private val client = OkHttpClient.Builder()
@@ -724,11 +724,23 @@ object ApiClient {
                 "des retours à la ligne et une structure visuelle : ceci est affiché dans un chat, pas une " +
                 "phrase à prononcer à l'oral. Ne mentionne jamais de commande système, de terme technique ni " +
                 "la consigne elle-même — donne directement le résultat final tel qu'il doit apparaître à l'écran."
+        val formattingSystemPrompt = "Tu mets en forme un résultat (fiche contact ou localisation) selon une consigne de présentation donnée, sans jamais altérer ni omettre les données fournies, et sans jamais afficher un champ vide."
         return try {
-            val response = dispatchToProvider(
-                context, provider, listOf(HistoryEntry("user", prompt)),
-                systemPrompt = "Tu mets en forme un résultat (fiche contact ou localisation) selon une consigne de présentation donnée, sans jamais altérer ni omettre les données fournies, et sans jamais afficher un champ vide."
-            )
+            // Signalement utilisateur : les commandes système simples passent désormais par
+            // l'IA locale par défaut, MAIS une demande de présentation/mise en forme SPÉCIFIQUE
+            // (fiche contact complète, tableau, style particulier -- exactement ce que ce
+            // marqueur signale) doit rester sur le cloud, de bien meilleure qualité pour ce
+            // genre de reformulation fidèle qu'un petit modèle embarqué. Le modèle local n'a de
+            // toute façon jamais les actions correspondantes (fiche contact Obsidian) dans
+            // LOCAL_SYSTEM_PROMPT, donc forcer le cloud ICI (plutôt que de repasser par
+            // dispatchToProvider avec le provider local) évite en plus une double invocation
+            // inutile du modèle embarqué pour un résultat qu'il ne sait de toute façon pas
+            // produire correctement.
+            val response = if (provider.isLocal) {
+                sendAuto(context, listOf(HistoryEntry("user", prompt)), withAssistantIdentity(context, withCurrentDateTime(formattingSystemPrompt)))
+            } else {
+                dispatchToProvider(context, provider, listOf(HistoryEntry("user", prompt)), systemPrompt = formattingSystemPrompt)
+            }
             val cleaned = JarvisCommandParser.cleanResponse(response).trim()
             if (cleaned.isBlank()) data else cleaned
         } catch (e: Exception) {
@@ -925,34 +937,25 @@ object ApiClient {
      * l'ancien code : le SYSTEM_PROMPT cloud complet dépasserait la fenêtre de contexte d'un
      * petit modèle embarqué.
      */
-    // Mots-clés couvrant TOUTES les catégories que LOCAL_SYSTEM_PROMPT (voir plus haut) exclut
-    // déjà explicitement de sa propre portée -- "contacts, agenda, fichiers, notes, email,
-    // réseau..." -- donc pour lesquelles l'issue d'un appel au modèle génératif embarqué est
-    // connue à 100% d'avance : soit <<ESCALATE_CLOUD>>, soit une hallucination (aucune de ces
-    // données n'est réellement accessible au modèle local, contrairement au cloud qui exécute
-    // les vraies actions JARVIS_CMD). Ne PAS y remettre lampe/réveil/minuteur : ces trois-là
-    // sont gérées par LocalCommandController (voir sendLocal) et doivent rester sur leur propre
-    // chemin rapide. Signalement utilisateur : "c'est la même chose avec agenda, contact, etc,
-    // toutes les commandes en lien avec le smartphone".
+    // Mots-clés couvrant UNIQUEMENT les catégories qui restent réellement hors de portée du
+    // modèle embarqué même après l'extension de LOCAL_SYSTEM_PROMPT (voir plus haut) --
+    // fichiers, notes/Obsidian, réseau local/domotique/GitHub. Signalement utilisateur explicite
+    // ("TOUTES LES CMD SYSTEM FLASH, MINUTEUR, REVEIL, AGENDA, CONTACT, SMS, MAIL, NOTIFICATION
+    // ETC... PASSENT PAR LE LOCAL PRINCIPALEMENT") : agenda/contacts natifs/SMS/appels/emails/
+    // notifications/wifi/bluetooth sont RETIRÉS d'ici -- LOCAL_SYSTEM_PROMPT sait désormais les
+    // exécuter lui-même (actions identiques à celles du cloud, JarvisCommandParser ne fait pas
+    // la différence). Le cas "présentation spécifique/fiche contact" (l'exception demandée par
+    // l'utilisateur) n'a PAS besoin d'être détecté ici par mot-clé : LOCAL_SYSTEM_PROMPT n'a de
+    // toute façon jamais les actions de fiche contact (save_contact_profile, etc.) dans sa
+    // propre liste, donc le modèle local répond déjà <<ESCALATE_CLOUD>> de lui-même pour ce cas
+    // précis (voir la clause IMPORTANT de LOCAL_SYSTEM_PROMPT), et applyMarkerFormatting force
+    // en plus le cloud pour la reformulation finale dès qu'un marqueur de présentation apparaît
+    // (voir plus bas). Ne PAS y remettre lampe/réveil/minuteur : gérées par LocalCommandController
+    // (voir sendLocal), chemin rapide séparé.
     private val CLOUD_ONLY_PHONE_KEYWORDS = listOf(
-        // Agenda / calendrier
-        "planning", "calendrier", "agenda", "rendez-vous", "rendez vous", "rdv",
-        "réunion", "reunion", "évènement", "evenement", "évènements", "evenements",
-        // Contacts
-        "contact", "coordonnées", "coordonnees", "anniversaire",
-        // SMS / appels téléphoniques
-        "sms", "texto", "appel manqué", "appel manque", "mes appels", "derniers appels",
-        // Email
-        "email", "e-mail", "mail", "courriel", "boîte mail", "boite mail",
-        // Notifications
-        "notification", "notifications",
-        // WiFi / Bluetooth
-        "wifi", "wi-fi", "bluetooth",
-        // Fichiers
+        // Fichiers (gestionnaire de fichiers générique -- distinct de la prise de notes
+        // Obsidian, désormais gérée localement, voir LOCAL_SYSTEM_PROMPT)
         "fichier", "fichiers", "stockage", "storage",
-        // Notes / vault Obsidian (au-delà des quelques formulations déjà gérées par
-        // LocalCommandController.vaultSearchCommand)
-        "note", "notes", "obsidian", "vault", "journal",
         // GPS / itinéraire (pas géré par LocalCommandController, contrairement à flash/réveil/minuteur)
         "itinéraire", "itineraire", "gps", "où je suis", "ou je suis", "ma position",
         // Domotique / Home Assistant
@@ -1100,32 +1103,37 @@ object ApiClient {
         }
 
         // Protection PROACTIVE contre le 429 (signalement utilisateur : "j'ai 4 clés API Groq,
-        // et en seulement 2 demandes le quota des 4 clés serait atteint") : sur les fournisseurs
-        // à plafond TPM connu et bas (Groq notamment -- voir Prefs.KNOWN_TPM_LIMITS), ce plafond
-        // s'applique au niveau du COMPTE, PAS par clé individuelle -- changer de clé une fois
-        // qu'on l'a dépassé ne sert donc à RIEN, les 4 clés partagent le même compteur réel.
-        // Estimation grossière (~4 caractères/jeton, suffisant pour une décision oui/non) du
-        // prompt système + historique sur le point d'être envoyé ; si ça dépasserait le budget
-        // encore disponible sur la minute glissante, on l'évite purement et simplement -- ni
-        // appel réseau voué à l'échec, ni clé blacklistée pour rien (elle n'a rien de cassé).
+        // et en seulement 2 demandes le quota des 4 clés serait atteint" -- confirmé ensuite :
+        // ces 4 clés viennent de 4 comptes DIFFÉRENTS, donc CHACUNE a son propre plafond TPM
+        // indépendant, voir Prefs.KNOWN_TPM_LIMITS/wouldExceedTpmBudget). Vérifiée PAR CLÉ,
+        // DANS la boucle de rotation ci-dessous : si la clé sur le point d'être essayée approche
+        // son propre plafond, on passe à la suivante SANS tenter un appel voué à l'échec ni la
+        // blacklister pour rien (elle n'a rien de cassé) -- les autres clés, sur d'autres
+        // comptes, restent parfaitement valides. Estimation grossière (~4 caractères/jeton,
+        // suffisant pour une décision oui/non) du prompt système + historique à envoyer.
         val estimatedTokens = estimateTokens(systemPrompt) + history.sumOf { estimateTokens(textWithAttachments(it)) }
-        if (Prefs.wouldExceedTpmBudget(context, provider, estimatedTokens)) {
-            return "Erreur API (429) : limite de débit ${provider.displayName} proche (protection proactive -- " +
-                "évite un vrai 429), nouvel essai dans un instant ou bascule automatique si le mode Automatique est actif."
-        }
 
         val maxAttempts = maxOf(1, keys.size)
         var lastErr = ""
 
         for (attempt in 0 until maxAttempts) {
             val apiKey = if (keys.isNotEmpty()) Prefs.getNextApiKey(context, provider) else ""
+
+            if (apiKey.isNotBlank() && Prefs.wouldExceedTpmBudget(context, provider, apiKey, estimatedTokens)) {
+                lastErr = "Erreur API (429) : limite de débit ${provider.displayName} proche sur cette clé " +
+                    "(protection proactive -- évite un vrai 429), clé suivante essayée automatiquement."
+                continue
+            }
+
             val response = sendOpenAiCompatible(baseUrl, model, apiKey, history, provider, systemPrompt)
 
-            // Le budget TPM est par COMPTE (voir plus haut), donc enregistré qu'il y ait succès
-            // ou échec -- une requête envoyée consomme le quota même si la réponse échoue pour
-            // une autre raison que 429/401. Compte réel de la réponse quand connu (usage.total_
-            // tokens), sinon repli sur l'estimation calculée avant l'envoi.
-            Prefs.recordProviderTokens(context, provider, response.usageTokens ?: estimatedTokens)
+            // Enregistré qu'il y ait succès ou échec -- une requête envoyée consomme le quota
+            // DE CETTE CLÉ même si la réponse échoue pour une autre raison que 429/401. Compte
+            // réel de la réponse quand connu (usage.total_tokens), sinon repli sur l'estimation
+            // calculée avant l'envoi.
+            if (apiKey.isNotBlank()) {
+                Prefs.recordProviderTokens(context, provider, apiKey, response.usageTokens ?: estimatedTokens)
+            }
 
             val result = response.text
             if (!result.startsWith("Erreur API (429)") && !result.startsWith("Erreur API (401)")) {
