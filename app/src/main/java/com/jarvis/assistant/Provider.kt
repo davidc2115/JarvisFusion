@@ -4,7 +4,7 @@ package com.jarvis.assistant
  * Liste des fournisseurs IA disponibles.
  * isLocal = true signifie : aucun réseau, modèle exécuté directement sur le téléphone.
  * isAuto = true signifie : essaie plusieurs fournisseurs configurés jusqu'à ce que l'un réponde.
- * needsApiKey = false signifie : pas de clé API requise (Custom sans auth, Pollinations…).
+ * needsApiKey = false signifie : pas de clé API requise (Custom sans auth).
  */
 enum class Provider(
     val displayName: String,
@@ -88,18 +88,16 @@ enum class Provider(
         "",
         needsApiKey = true
     ),
-    // Pollinations.ai (text.pollinations.ai/openai, endpoint compatible OpenAI) : IA de secours
-    // GRATUITE et SANS AUCUNE CLÉ (accès anonyme officiel, cf. https://github.com/pollinations/pollinations/blob/master/APIDOCS.md),
-    // placée en tout dernier recours dans AUTO_FALLBACK_ORDER ci-dessous — même logique que AI Horde
-    // pour les images (voir ImageGenController) : ça garantit que le mode Automatique répond TOUJOURS,
-    // même si l'utilisateur n'a configuré aucune clé API. Contrepartie honnête : service communautaire
-    // tiers, limité à 1 requête/15s en anonyme et moins fiable qu'un fournisseur avec clé dédiée.
-    POLLINATIONS(
-        "Pollinations (gratuit, sans clé, dernier recours)",
-        "https://text.pollinations.ai/openai",
-        "openai",
-        needsApiKey = false
-    ),
+    // Pollinations RETIRÉ (signalement utilisateur répété : "Toutes les IA configurées ont
+    // échoué" persistait à cause de lui) -- ce filet de secours anonyme et gratuit limitait les
+    // requêtes à 1/15s (voir doc officielle), et l'architecture à 2 appels par question
+    // (réponse + reformulation) le faisait quasi systématiquement échouer lui-même dès qu'il
+    // était atteint comme dernier recours, produisant l'échec total au pire moment (plus aucun
+    // candidat après lui dans AUTO_FALLBACK_ORDER). Un espacement proactif avait été tenté sans
+    // suffire à satisfaire l'utilisateur -- retiré complètement sur sa demande explicite plutôt
+    // que de continuer à rafistoler un service tiers non fiable. Le mode Automatique s'arrête
+    // désormais honnêtement sur "Aucune IA configurée"/"Toutes les IA ont échoué" quand aucun
+    // fournisseur à clé configurée ne répond, plutôt que de dépendre d'un filet cassé.
 
     CUSTOM(
         "Autre / URL personnalisée",
@@ -128,7 +126,7 @@ enum class Provider(
     /** Fournisseurs cloud éligibles au mode Automatique, par ordre de préférence. */
     companion object {
         val AUTO_FALLBACK_ORDER = listOf(
-            GROQ, GEMINI, CLAUDE, OPENAI, MISTRAL, DEEPSEEK, PERPLEXITY, TOGETHER, OPENROUTER, POLLINATIONS
+            GROQ, GEMINI, CLAUDE, OPENAI, MISTRAL, DEEPSEEK, PERPLEXITY, TOGETHER, OPENROUTER
         )
 
         /** Tous les providers cloud qui acceptent une clé API individuelle. */

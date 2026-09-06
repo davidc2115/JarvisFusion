@@ -287,25 +287,13 @@ object Prefs {
     }
 
     // ─── Espacement minimal entre requêtes pour un fournisseur anonyme à débit très limité ────
-    // BUG RÉEL SUSPECTÉ (signalement utilisateur répété : "Toutes les IA configurées ont
-    // échoué" persiste même après les correctifs de blacklist/TPM Groq) : Pollinations (filet
-    // de secours GRATUIT et SANS CLÉ, censé "toujours répondre" en dernier recours dans
-    // AUTO_FALLBACK_ORDER) limite les requêtes ANONYMES à UNE seule toutes les 15 secondes
-    // (documentation officielle, github.com/pollinations/pollinations/APIDOCS.md, section
-    // "Access Tiers"). Or l'architecture actuelle fait DEUX appels par question informationnelle
-    // (réponse principale + reformulation naturelle, voir ApiClient.summarizeNaturally) : si
-    // Pollinations est atteint comme dernier recours, le DEUXIÈME appel arrive quasi
-    // instantanément après le premier et se fait quasi certainement rejeter (429) par ce même
-    // fournisseur -- le filet de secours "toujours disponible" ne l'est plus vraiment. Un vrai
-    // 429 réactif (blacklist) arrive trop tard ici : sans clé à faire tourner (needsApiKey=
-    // false), il n'y a qu'UN seul essai possible, donc UN seul 429 suffit à faire échouer TOUT
-    // le mode Automatique. Correctif : espacer PROACTIVEMENT les appels à ce type de
-    // fournisseur, quitte à attendre quelques secondes -- largement préférable à un échec
-    // garanti, puisque Pollinations est déjà le tout dernier recours (l'utilisateur attend déjà
-    // depuis un moment à ce stade de la cascade).
-    private val MIN_REQUEST_INTERVAL_MS: Map<Provider, Long> = mapOf(
-        Provider.POLLINATIONS to 15_500L, // 15s documentés + marge de sécurité
-    )
+    // Pollinations (qui aurait eu besoin de ce mécanisme, 1 requête/15s en anonyme) a été
+    // RETIRÉ complètement de Provider (signalement utilisateur : "Toutes les IA configurées ont
+    // échoué" persistait à cause de lui malgré cet espacement) -- voir Provider.kt pour le
+    // détail. Mécanisme conservé vide pour un futur fournisseur à débit anonyme limité, sans
+    // vérification proactive tant que cette liste est vide (comportement inchangé pour tous les
+    // fournisseurs actuels).
+    private val MIN_REQUEST_INTERVAL_MS: Map<Provider, Long> = emptyMap()
 
     private fun lastCallKey(provider: Provider) = "last_call_${provider.name}"
 
